@@ -1,36 +1,24 @@
-import React, { useState } from "react";
-import { Outlet } from "react-router-dom";
-import Navbar from "../components/Navbar";
-import Sidebar from "../components/Sidebar";
+import React, { useState } from 'react';
+import { Outlet } from 'react-router-dom';
+import Navbar from '../components/Navbar';
+import Sidebar from '../components/Sidebar';
 
+// Single source of truth for whether the mobile/tablet drawer is open.
+// Desktop (lg+) ignores this entirely — the sidebar is always visible there
+// via its own `lg:translate-x-0` class, and content always has `lg:pl-64`.
 const DashboardLayout = () => {
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-
-  // Define Tailwind CSS classes for sidebar width and corresponding main content margin
-  const sidebarWidthClass = isSidebarOpen ? "w-64" : "w-20";
-  const mainMarginClass = isSidebarOpen ? "ml-64" : "ml-20";
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   return (
-    <div className="flex flex-col min-h-screen bg-gray-100">
-      {/* Sticky Navbar */}
-      <header className="sticky top-0 z-50 w-full bg-white shadow-md">
-        <Navbar toggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)} />
-      </header>
+    <div className="min-h-screen bg-gray-100 w-full overflow-x-hidden">
+      <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
 
-      {/* Layout Container */}
-      <div className="flex flex-1">
-        {/* Fixed Sidebar with increased top padding */}
-        <aside
-          className={`fixed top-0 left-0 h-screen bg-gray-800 text-white transition-all duration-300 ${sidebarWidthClass} pt-24`}
-        >
-          <Sidebar
-            isOpen={isSidebarOpen}
-            toggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
-          />
-        </aside>
+      <div className="flex flex-col min-h-screen lg:pl-64">
+        <header className="sticky top-0 z-20 w-full bg-white shadow-sm">
+          <Navbar onMenuClick={() => setSidebarOpen(true)} />
+        </header>
 
-        {/* Main Content Area with margin to accommodate the fixed sidebar */}
-        <main className={`flex-1 p-6 transition-all duration-300 ${mainMarginClass}`}>
+        <main className="flex-1 w-full min-w-0">
           <Outlet />
         </main>
       </div>

@@ -38,12 +38,15 @@ const Signup = () => {
   };
 
   return (
-    <div className="flex justify-center items-center h-screen bg-gray-100">
+    <div className="flex justify-center items-center min-h-screen bg-gray-100 py-8 px-4">
       <form
         onSubmit={handleSubmit}
         className="bg-white p-6 rounded-lg shadow-lg w-full max-w-sm"
       >
-        <h2 className="text-2xl font-semibold mb-4 text-center">Sign Up</h2>
+        <div className="text-center mb-4">
+          <p className="text-blue-600 font-bold text-lg">Kushal Timbers</p>
+          <h2 className="text-xl font-semibold text-gray-700">Create Your Account</h2>
+        </div>
 
         {signupError && (
           <div className="mb-4 p-3 bg-red-100 text-red-700 rounded border border-red-200">

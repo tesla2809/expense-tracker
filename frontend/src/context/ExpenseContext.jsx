@@ -49,21 +49,16 @@ export const ExpenseProvider = ({ children }) => {
 
   // Fetch Expenses when the component mounts or user changes
   useEffect(() => {
-    if (user && user._id) {
-      fetchExpenses(user._id);
+    if (user) {
+      fetchExpenses();
     }
   }, [user]);
 
-  // Fetch Expenses for Logged-in User
-  const fetchExpenses = async (userId) => {
-    if (!userId) {
-      console.error("fetchExpenses: User ID is missing!");
-      return;
-    }
-
+  // Fetch Expenses for the logged-in user (identity comes from the JWT, server-side)
+  const fetchExpenses = async () => {
     dispatch({ type: ACTIONS.FETCH_REQUEST });
     try {
-      const expenses = await expenseApi.fetchExpenses(userId); // ✅ Correct call
+      const expenses = await expenseApi.fetchExpenses();
       dispatch({ type: ACTIONS.FETCH_SUCCESS, payload: expenses });
     } catch (error) {
       dispatch({ type: ACTIONS.FETCH_FAILURE, payload: error.message });

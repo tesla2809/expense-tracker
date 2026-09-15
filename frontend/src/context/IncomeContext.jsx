@@ -60,46 +60,37 @@ export const IncomeProvider = ({ children }) => {
 
   // Fetch Income when the component mounts or user changes
   useEffect(() => {
-    if (user && user._id) {
-      fetchIncome(user._id);
+    if (user) {
+      fetchIncome();
     } else {
       // Reset state when user logs out
       dispatch({ type: ACTIONS.RESET });
     }
   }, [user]);
 
-  // Fetch Income for Logged-in User
-  // Fetch Income for Logged-in User
-const fetchIncome = useCallback(async (userId) => {
-  if (!userId) {
-    console.error("fetchIncome: User ID is missing!");
-    return;
-  }
-
-  dispatch({ type: ACTIONS.FETCH_REQUEST });
-  try {
-    const income = await incomeApi.getIncome(userId); // ✅ FIXED HERE
-    dispatch({ type: ACTIONS.FETCH_SUCCESS, payload: income });
-  } catch (error) {
-    const errorMessage = error.response?.data?.message || error.message || "Failed to fetch income";
-    console.error("Error fetching income:", errorMessage);
-    dispatch({ type: ACTIONS.FETCH_FAILURE, payload: errorMessage });
-  }
-}, []);
+  // Fetch Income for the logged-in user (identity comes from the JWT, server-side)
+  const fetchIncome = useCallback(async () => {
+    dispatch({ type: ACTIONS.FETCH_REQUEST });
+    try {
+      const income = await incomeApi.getIncome();
+      dispatch({ type: ACTIONS.FETCH_SUCCESS, payload: income });
+    } catch (error) {
+      const errorMessage = error.response?.data?.message || error.message || "Failed to fetch income";
+      console.error("Error fetching income:", errorMessage);
+      dispatch({ type: ACTIONS.FETCH_FAILURE, payload: errorMessage });
+    }
+  }, []);
 
 
   // Add new income
   const addIncome = useCallback(async (incomeData) => {
-    if (!user?._id) {
+    if (!user) {
       dispatch({ type: ACTIONS.FETCH_FAILURE, payload: "User not authenticated" });
       return null;
     }
-    
+
     try {
-      const newIncome = await incomeApi.addIncome({
-        ...incomeData,
-        userId: user._id,
-      });
+      const newIncome = await incomeApi.addIncome(incomeData);
       dispatch({ type: ACTIONS.ADD_INCOME, payload: newIncome });
       return newIncome;
     } catch (error) {
