@@ -24,8 +24,14 @@ const registerUser = async (req, res) => {
     await newUser.save();
 
     const token = generateToken(newUser._id);
+    const { password: _, ...userWithoutPassword } = newUser._doc;
 
-    res.status(201).json({ success: true, message: "User registered successfully", token });
+    res.status(201).json({
+      success: true,
+      message: "User registered successfully",
+      token,
+      user: userWithoutPassword,
+    });
   } catch (error) {
     console.error("❌ Signup Error:", error);
     res.status(500).json({ success: false, message: "Internal Server Error" });
@@ -42,7 +48,8 @@ const loginUser = async (req, res) => {
       return res.status(404).json({ success: false, message: "User does not exist" });
     }
 
-    if (user.password !== password) {
+    const isMatch = await user.comparePassword(password);
+    if (!isMatch) {
       return res.status(401).json({ success: false, message: "Invalid credentials" });
     }
 

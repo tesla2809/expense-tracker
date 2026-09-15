@@ -13,7 +13,7 @@ const Navbar = () => {
             to="/dashboard"
             className="text-blue-600 font-bold text-xl tracking-wide hover:text-blue-800 transition-all"
           >
-            Expense Manager
+            Kushal Timbers
           </Link>
         </div>
 

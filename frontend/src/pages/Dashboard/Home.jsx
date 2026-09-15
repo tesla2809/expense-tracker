@@ -1,7 +1,25 @@
 import { useEffect, useState, useMemo } from "react";
 import { fetchExpenses } from "/src/api/expenses";
 import { getIncome } from "/src/api/income";
-import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from "recharts";
+import { fetchMonthlyTrend, fetchPendingPayments } from "/src/api/reports";
+import { fetchParties } from "/src/api/parties";
+import {
+  PieChart,
+  Pie,
+  Cell,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+  LineChart,
+  Line,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+} from "recharts";
+import { FiClock, FiAlertTriangle } from "react-icons/fi";
+import { Link } from "react-router-dom";
 import { useAuth } from "/src/context/AuthContext"; // Adjust this import path as needed
 
 // Enhanced color palette
@@ -35,38 +53,50 @@ const TransactionItem = ({ transaction }) => (
     <span 
       className={`font-bold ${transaction.type === 'income' ? 'text-green-500' : 'text-red-500'}`}
     >
-      {transaction.type === 'income' ? '+' : '-'}${transaction.amount}
+      {transaction.type === 'income' ? '+' : '-'}{formatCurrency(transaction.amount)}
     </span>
   </div>
 );
 
 
+const formatCurrency = (amount) =>
+  new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(
+    amount || 0
+  );
+
 const Home = () => {
   const { user } = useAuth(); // Get the user from auth context
-  const userId = user?._id; // Extract the userId
-  
+
   const [expenses, setExpenses] = useState([]);
   const [incomes, setIncomes] = useState([]);
+  const [trend, setTrend] = useState([]);
+  const [pending, setPending] = useState({ items: [], totalPendingPayable: 0, totalPendingReceivable: 0, overdueCount: 0 });
+  const [parties, setParties] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
   useEffect(() => {
     const loadData = async () => {
-      if (!userId) {
-        console.log("No userId available in auth context");
+      if (!user) {
         setError("Authentication required");
         setLoading(false);
         return;
       }
-      
+
       try {
         setLoading(true);
-        const [expenseData, incomeData] = await Promise.all([
-          fetchExpenses(userId),
-          getIncome(userId),
+        const [expenseData, incomeData, trendData, pendingData, partyData] = await Promise.all([
+          fetchExpenses(),
+          getIncome(),
+          fetchMonthlyTrend(6),
+          fetchPendingPayments(),
+          fetchParties(),
         ]);
         setExpenses(expenseData || []);
         setIncomes(incomeData || []);
+        setTrend(trendData || []);
+        setPending(pendingData || { items: [], totalPendingPayable: 0, totalPendingReceivable: 0, overdueCount: 0 });
+        setParties(partyData || []);
         setError(null);
       } catch (error) {
         console.error("Error loading data:", error);
@@ -75,9 +105,9 @@ const Home = () => {
         setLoading(false);
       }
     };
-    
+
     loadData();
-  }, [userId]);
+  }, [user]);
 
   // Memoized calculations
   const totalIncome = useMemo(() => incomes.reduce((acc, i) => acc + i.amount, 0), [incomes]);
@@ -97,6 +127,36 @@ const Home = () => {
     // Sort by date (assuming there's a date property)
     return combined.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0)).slice(0, 6);
   }, [recentExpenses, recentIncomes]);
+
+  // This month's profit, straight from the trend series (its last entry is always the current month)
+  const currentMonthEntry = trend[trend.length - 1];
+  const currentMonthProfit = currentMonthEntry?.profit ?? 0;
+
+  // How much money moves through each payment mode (Cash/Bank/UPI/Cheque), combining both expenses and income
+  const paymentModeData = useMemo(() => {
+    const totals = {};
+    [...expenses, ...incomes].forEach((t) => {
+      const mode = t?.paymentMode || "Other";
+      totals[mode] = (totals[mode] || 0) + (Number(t?.amount) || 0);
+    });
+    return Object.entries(totals)
+      .map(([name, value]) => ({ name, value }))
+      .sort((a, b) => b.value - a.value);
+  }, [expenses, incomes]);
+  const PAYMENT_MODE_COLORS = ["#5C7CFA", "#20C997", "#FCC419", "#FF6B6B", "#845EF7", "#94D82D"];
+
+  // Top 5 vendors/customers by total business volume
+  const topPartiesData = useMemo(
+    () =>
+      parties.slice(0, 5).map((p) => ({
+        name: p.party.length > 16 ? `${p.party.slice(0, 16)}…` : p.party,
+        fullName: p.party,
+        amount: p.totalPaid + p.totalReceived + p.pendingPayable + p.pendingReceivable,
+      })),
+    [parties]
+  );
+
+  const topPendingItems = pending.items.slice(0, 5);
 
   if (loading) {
     return (
@@ -125,37 +185,168 @@ const Home = () => {
     <div className="p-6 max-w-7xl mx-auto">
       {/* Page Title */}
       <div className="mb-8">
-        <h1 className="text-3xl font-bold text-gray-800">Financial Dashboard</h1>
-        <p className="text-gray-600">Track your income, expenses, and overall financial health</p>
+        <h1 className="text-3xl font-bold text-gray-800">Kushal Timbers — Financial Dashboard</h1>
+        <p className="text-gray-600">Track the business's income, expenses, and overall financial health</p>
       </div>
       
       {/* Overview Section */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
         <Card className="p-6 relative overflow-hidden">
           <div className="absolute -right-6 -top-6 w-24 h-24 rounded-full bg-green-100 opacity-50"></div>
           <h3 className="text-lg font-medium text-gray-500 mb-1">Total Income</h3>
-          <p className="text-3xl font-bold text-green-500">${totalIncome.toLocaleString()}</p>
+          <p className="text-3xl font-bold text-green-500">{formatCurrency(totalIncome)}</p>
           <div className="mt-2 text-sm text-gray-500">From {incomes.length} sources</div>
         </Card>
-        
+
         <Card className="p-6 relative overflow-hidden">
           <div className="absolute -right-6 -top-6 w-24 h-24 rounded-full bg-red-100 opacity-50"></div>
           <h3 className="text-lg font-medium text-gray-500 mb-1">Total Expense</h3>
-          <p className="text-3xl font-bold text-red-500">${totalExpense.toLocaleString()}</p>
+          <p className="text-3xl font-bold text-red-500">{formatCurrency(totalExpense)}</p>
           <div className="mt-2 text-sm text-gray-500">From {expenses.length} transactions</div>
         </Card>
-        
+
         <Card className="p-6 relative overflow-hidden">
           <div className="absolute -right-6 -top-6 w-24 h-24 rounded-full bg-blue-100 opacity-50"></div>
           <h3 className="text-lg font-medium text-gray-500 mb-1">Balance</h3>
           <p className={`text-3xl font-bold ${balance >= 0 ? 'text-blue-500' : 'text-orange-500'}`}>
-            ${balance.toLocaleString()}
+            {formatCurrency(balance)}
           </p>
           <div className="mt-2 text-sm text-gray-500">
             {balance >= 0 ? 'You\'re doing great!' : 'Time to cut expenses'}
           </div>
         </Card>
+
+        <Card className="p-6 relative overflow-hidden">
+          <div className="absolute -right-6 -top-6 w-24 h-24 rounded-full bg-purple-100 opacity-50"></div>
+          <h3 className="text-lg font-medium text-gray-500 mb-1">This Month's Profit</h3>
+          <p className={`text-3xl font-bold ${currentMonthProfit >= 0 ? 'text-purple-600' : 'text-orange-500'}`}>
+            {formatCurrency(currentMonthProfit)}
+          </p>
+          <div className="mt-2 text-sm text-gray-500">{currentMonthEntry?.label || 'This month'}</div>
+        </Card>
       </div>
+
+      {/* Monthly Trend */}
+      <Card className="mb-8">
+        <div className="border-b border-gray-100 p-4">
+          <h2 className="text-xl font-semibold text-gray-800">Income vs Expense — Last 6 Months</h2>
+        </div>
+        <div className="p-4 h-72">
+          {trend.some((m) => m.income || m.expense) ? (
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={trend} margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                <XAxis dataKey="label" tick={{ fontSize: 12 }} />
+                <YAxis tickFormatter={(value) => `₹${value}`} tick={{ fontSize: 12 }} />
+                <Tooltip formatter={(value) => formatCurrency(value)} />
+                <Legend />
+                <Line type="monotone" dataKey="income" name="Income" stroke="#4CAF50" strokeWidth={2} dot={{ r: 3 }} />
+                <Line type="monotone" dataKey="expense" name="Expense" stroke="#F44336" strokeWidth={2} dot={{ r: 3 }} />
+              </LineChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="flex items-center justify-center h-full text-center text-gray-500">
+              <p>Not enough data yet to show a trend</p>
+            </div>
+          )}
+        </div>
+      </Card>
+
+      {/* Payment Mode Breakdown + Top Parties */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+        <Card>
+          <div className="border-b border-gray-100 p-4">
+            <h2 className="text-xl font-semibold text-gray-800">Payment Mode Breakdown</h2>
+          </div>
+          <div className="p-4 flex flex-col items-center h-72">
+            {paymentModeData.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie data={paymentModeData} cx="50%" cy="50%" outerRadius={80} innerRadius={40} dataKey="value" paddingAngle={2} label>
+                    {paymentModeData.map((entry, index) => (
+                      <Cell key={`mode-cell-${index}`} fill={PAYMENT_MODE_COLORS[index % PAYMENT_MODE_COLORS.length]} stroke="#FFFFFF" strokeWidth={1} />
+                    ))}
+                  </Pie>
+                  <Tooltip formatter={(value) => formatCurrency(value)} />
+                  <Legend />
+                </PieChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex items-center justify-center h-full text-center text-gray-500">
+                <p>No transactions yet</p>
+              </div>
+            )}
+          </div>
+        </Card>
+
+        <Card>
+          <div className="border-b border-gray-100 p-4">
+            <h2 className="text-xl font-semibold text-gray-800">Top Vendors &amp; Customers</h2>
+          </div>
+          <div className="p-4 h-72">
+            {topPartiesData.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={topPartiesData} layout="vertical" margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis type="number" tickFormatter={(value) => `₹${value}`} tick={{ fontSize: 12 }} />
+                  <YAxis type="category" dataKey="name" tick={{ fontSize: 12 }} width={100} />
+                  <Tooltip formatter={(value, _name, item) => [formatCurrency(value), item.payload.fullName]} />
+                  <Bar dataKey="amount" fill="#5C7CFA" radius={[0, 4, 4, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex items-center justify-center h-full text-center text-gray-500">
+                <p>No vendor/customer names recorded yet</p>
+              </div>
+            )}
+          </div>
+        </Card>
+      </div>
+
+      {/* Pending Payments */}
+      <Card className="mb-8">
+        <div className="border-b border-gray-100 p-4 flex items-center justify-between">
+          <h2 className="text-xl font-semibold text-gray-800">Pending Payments</h2>
+          {pending.overdueCount > 0 && (
+            <span className="inline-flex items-center text-sm font-medium px-3 py-1 bg-red-100 text-red-700 rounded-full">
+              <FiAlertTriangle size={14} className="mr-1" /> {pending.overdueCount} overdue
+            </span>
+          )}
+        </div>
+        <div className="divide-y divide-gray-100">
+          {topPendingItems.length > 0 ? (
+            topPendingItems.map((item) => (
+              <div key={item._id} className="flex items-center justify-between p-4">
+                <div className="flex items-center min-w-0">
+                  <div className={`w-2 h-10 rounded-full mr-3 shrink-0 ${item.type === 'income' ? 'bg-green-400' : 'bg-red-400'}`}></div>
+                  <div className="min-w-0">
+                    <p className="font-medium truncate">{item.title}{item.party ? ` — ${item.party}` : ''}</p>
+                    <p className={`text-xs flex items-center ${item.overdue ? 'text-red-600 font-medium' : 'text-gray-500'}`}>
+                      <FiClock size={11} className="mr-1" />
+                      {item.dueDate ? `Due ${new Date(item.dueDate).toLocaleDateString('en-IN')}` : 'No due date'}
+                      {item.overdue ? ' · Overdue' : ''}
+                    </p>
+                  </div>
+                </div>
+                <span className={`font-bold shrink-0 ml-3 ${item.type === 'income' ? 'text-green-600' : 'text-red-600'}`}>
+                  {item.type === 'income' ? '+' : '-'}{formatCurrency(item.amount)}
+                </span>
+              </div>
+            ))
+          ) : (
+            <div className="p-6 text-center text-gray-500">
+              <p>Nothing pending — everything's settled</p>
+            </div>
+          )}
+        </div>
+        {pending.items.length > 0 && (
+          <div className="p-4 border-t border-gray-100 text-center">
+            <Link to="/dashboard/parties" className="text-blue-500 hover:text-blue-700 font-medium">
+              View full party ledger
+            </Link>
+          </div>
+        )}
+      </Card>
 
       {/* Recent Transactions and Financial Overview */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
@@ -211,7 +402,7 @@ const Home = () => {
                     <Cell fill="#4CAF50" stroke="#FFFFFF" strokeWidth={2} />
                     <Cell fill="#F44336" stroke="#FFFFFF" strokeWidth={2} />
                   </Pie>
-                  <Tooltip formatter={(value) => `$${value}`} />
+                  <Tooltip formatter={(value) => formatCurrency(value)} />
                   <Legend />
                 </PieChart>
               </ResponsiveContainer>
@@ -236,7 +427,7 @@ const Home = () => {
             <div className="border-b border-gray-100 p-4 flex justify-between items-center">
               <h2 className="text-xl font-semibold text-gray-800">Recent Expenses</h2>
               <span className="text-sm font-medium px-3 py-1 bg-red-100 text-red-600 rounded-full">
-                ${totalExpense.toLocaleString()}
+                {formatCurrency(totalExpense)}
               </span>
             </div>
             <div className="divide-y divide-gray-100">
@@ -247,7 +438,7 @@ const Home = () => {
                       <p className="font-medium">{expense.title}</p>
                       <p className="text-xs text-gray-500">{expense.date ? new Date(expense.date).toLocaleDateString() : 'No date'}</p>
                     </div>
-                    <span className="font-bold text-red-500">${expense.amount}</span>
+                    <span className="font-bold text-red-500">{formatCurrency(expense.amount)}</span>
                   </div>
                 ))
               ) : (
@@ -288,7 +479,7 @@ const Home = () => {
                       />
                     ))}
                   </Pie>
-                  <Tooltip formatter={(value) => `$${value}`} />
+                  <Tooltip formatter={(value) => formatCurrency(value)} />
                   <Legend />
                 </PieChart>
               </ResponsiveContainer>
@@ -308,7 +499,7 @@ const Home = () => {
           <div className="border-b border-gray-100 p-4 flex justify-between items-center">
             <h2 className="text-xl font-semibold text-gray-800">Recent Income</h2>
             <span className="text-sm font-medium px-3 py-1 bg-green-100 text-green-600 rounded-full">
-              ${totalIncome.toLocaleString()}
+              {formatCurrency(totalIncome)}
             </span>
           </div>
           <div className="divide-y divide-gray-100">
@@ -319,7 +510,7 @@ const Home = () => {
                     <p className="font-medium">{income.source}</p>
                     <p className="text-xs text-gray-500">{income.date ? new Date(income.date).toLocaleDateString() : 'No date'}</p>
                   </div>
-                  <span className="font-bold text-green-500">${income.amount}</span>
+                  <span className="font-bold text-green-500">{formatCurrency(income.amount)}</span>
                 </div>
               ))
             ) : (
@@ -359,7 +550,7 @@ const Home = () => {
                       />
                     ))}
                   </Pie>
-                  <Tooltip formatter={(value) => `$${value}`} />
+                  <Tooltip formatter={(value) => formatCurrency(value)} />
                   <Legend />
                 </PieChart>
               </ResponsiveContainer>

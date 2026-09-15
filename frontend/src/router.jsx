@@ -13,6 +13,8 @@ import ForgotPassword from './pages/Auth/ForgotPassword';
 import Home from './pages/Dashboard/Home';
 import Income from './pages/Dashboard/Income';
 import Expenses from './pages/Dashboard/Expenses';
+import Import from './pages/Dashboard/Import';
+import Parties from './pages/Dashboard/Parties';
 
 
 // PrivateRoute component to protect routes
@@ -41,7 +43,8 @@ const AppRouter = () => {
             <Route index element={<Home />} />
             <Route path="income" element={<Income />} />
             <Route path="expenses" element={<Expenses />} />
-            
+            <Route path="import" element={<Import />} />
+            <Route path="parties" element={<Parties />} />
           </Route>
         </Route>
 

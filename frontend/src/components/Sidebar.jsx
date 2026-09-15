@@ -7,9 +7,11 @@ import {
   TrendingUp, 
   Receipt, 
   PieChart, 
-  Settings, 
+  Settings,
   CreditCard,
-  Calendar
+  Calendar,
+  UploadCloud,
+  Users
 } from 'lucide-react';
 
 const Sidebar = () => {
@@ -52,10 +54,11 @@ const Sidebar = () => {
         <div className="h-full flex flex-col">
           {/* Brand Header */}
           <div className="px-6 py-8 border-b border-gray-100">
-            <h2 className="text-blue-600 font-bold text-2xl flex items-center">
+            <h2 className="text-blue-600 font-bold text-xl flex items-center">
               <PieChart className="mr-2" size={24} />
-              Expense Manager
+              Kushal Timbers
             </h2>
+            <p className="text-xs text-gray-400 mt-1 ml-8">Expense Tracker</p>
           </div>
           
           {user ? (
@@ -112,8 +115,31 @@ const Sidebar = () => {
                   <Receipt size={20} className="mr-3" />
                   Expenses
                 </Link>
-                
-              
+
+                <Link
+                  to="/dashboard/import"
+                  className={`flex items-center py-3 px-4 rounded-lg transition-all ${
+                    isActive('/dashboard/import')
+                      ? 'bg-blue-50 text-blue-600 font-medium'
+                      : 'hover:bg-gray-50 hover:text-blue-600'
+                  }`}
+                >
+                  <UploadCloud size={20} className="mr-3" />
+                  Import
+                </Link>
+
+                <Link
+                  to="/dashboard/parties"
+                  className={`flex items-center py-3 px-4 rounded-lg transition-all ${
+                    isActive('/dashboard/parties')
+                      ? 'bg-blue-50 text-blue-600 font-medium'
+                      : 'hover:bg-gray-50 hover:text-blue-600'
+                  }`}
+                >
+                  <Users size={20} className="mr-3" />
+                  Parties
+                </Link>
+
               </div>
               
               {/* Bottom Actions */}
