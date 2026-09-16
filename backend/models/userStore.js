@@ -2,7 +2,7 @@
 // "Users" tab of the app's Google Sheet database (see utils/sheetsDb.js).
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
-import { ensureSheetTab, getAllRows, appendRow, findRowById } from "../utils/sheetsDb.js";
+import { ensureSheetTab, getAllRows, appendRow, findRowById, updateRowAt } from "../utils/sheetsDb.js";
 
 const SHEET_NAME = "Users";
 const HEADERS = ["id", "name", "email", "passwordHash", "createdAt"];
@@ -32,3 +32,13 @@ export const createUser = async ({ name, email, password }) => {
 };
 
 export const verifyPassword = (plainPassword, passwordHash) => bcrypt.compare(plainPassword, passwordHash || "");
+
+// Used by the password-reset flow, once the reset token/JWT has already
+// been verified — re-hashes and overwrites just this one user's row.
+export const updateUserPassword = async (id, newPlainPassword) => {
+  const rows = await getAllRows(SHEET_NAME, HEADERS);
+  const row = rows.find((r) => r.id === id);
+  if (!row) throw new Error("User not found");
+  const passwordHash = await bcrypt.hash(newPlainPassword, 10);
+  await updateRowAt(SHEET_NAME, HEADERS, row._row, { ...row, passwordHash });
+};

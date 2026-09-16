@@ -15,8 +15,6 @@ const Login = () => {
     e.preventDefault();
     setIsLoading(true);
 
-    console.log("Attempting login with:", { email, password });
-
     if (!email.trim() || !password.trim()) {
       toast.error("Email and password are required");
       setIsLoading(false);

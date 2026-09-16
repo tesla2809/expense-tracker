@@ -29,3 +29,29 @@ export const signupUser = async (credentials) => {
     throw new Error(error.response?.data?.message || "Signup failed.");
   }
 };
+
+/**
+ * Request a password-reset email for the given address.
+ */
+export const forgotPassword = async (email) => {
+  try {
+    const response = await apiClient.post("/auth/forgot-password", { email });
+    return response.data;
+  } catch (error) {
+    console.error("Error requesting password reset:", error);
+    throw new Error(error.response?.data?.message || "Couldn't send the reset email.");
+  }
+};
+
+/**
+ * Complete a password reset using the token from the emailed link.
+ */
+export const resetPassword = async (token, password) => {
+  try {
+    const response = await apiClient.post("/auth/reset-password", { token, password });
+    return response.data;
+  } catch (error) {
+    console.error("Error resetting password:", error);
+    throw new Error(error.response?.data?.message || "Couldn't reset the password.");
+  }
+};

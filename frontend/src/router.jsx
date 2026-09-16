@@ -10,8 +10,10 @@ import AuthLayout from './layouts/AuthLayout';
 import Login from './pages/Auth/Login';
 import Signup from './pages/Auth/Signup';
 import ForgotPassword from './pages/Auth/ForgotPassword';
+import ResetPassword from './pages/Auth/ResetPassword';
 import Home from './pages/Dashboard/Home';
 import Expenses from './pages/Dashboard/Expenses';
+import Vehicles from './pages/Dashboard/Vehicles';
 
 // PrivateRoute component to protect routes
 import PrivateRoute from './components/PrivateRoute';
@@ -31,12 +33,14 @@ const AppRouter = () => {
         <Route path="/login" element={<AuthLayout><Login /></AuthLayout>} />
         <Route path="/signup" element={<AuthLayout><Signup /></AuthLayout>} />
         <Route path="/forgot-password" element={<AuthLayout><ForgotPassword /></AuthLayout>} />
+        <Route path="/reset-password/:token" element={<AuthLayout><ResetPassword /></AuthLayout>} />
 
         {/* Protected Routes — deliberately just the dashboard + expense sheet */}
         <Route element={<PrivateRoute />}>
           <Route path="/dashboard" element={<DashboardLayout />}>
             <Route index element={<Home />} />
             <Route path="expenses" element={<Expenses />} />
+            <Route path="vehicles" element={<Vehicles />} />
           </Route>
         </Route>
 

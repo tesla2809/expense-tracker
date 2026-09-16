@@ -1,5 +1,6 @@
 import jwt from "jsonwebtoken";
-import { findUserByEmail, findUserById, createUser, verifyPassword } from "../models/userStore.js";
+import { findUserByEmail, findUserById, createUser, verifyPassword, updateUserPassword } from "../models/userStore.js";
+import { sendPasswordResetEmail } from "../utils/mailer.js";
 
 // Helper to generate JWT
 const generateToken = (userId) => {
@@ -80,4 +81,76 @@ const getUserProfile = async (req, res) => {
   }
 };
 
-export { registerUser, loginUser, getUserProfile };
+// Request a reset link. Always responds the same way whether or not the
+// email is actually registered — otherwise this endpoint could be used to
+// check which emails have an account (a real, if minor, privacy leak).
+const forgotPassword = async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ success: false, message: "Email is required" });
+    }
+
+    const user = await findUserByEmail(email);
+    if (user) {
+      // A short-lived, single-purpose JWT is the reset token — no separate
+      // token storage needed, since the Google Sheet has nowhere obviously
+      // safe to keep one and JWT already gives us tamper-proof expiry.
+      const resetToken = jwt.sign({ id: user.id, purpose: "password-reset" }, process.env.JWT_SECRET, {
+        expiresIn: "15m",
+      });
+      const frontendUrl = (process.env.FRONTEND_URL || "").replace(/\/$/, "");
+      const resetUrl = `${frontendUrl}/reset-password/${resetToken}`;
+      try {
+        await sendPasswordResetEmail(user.email, resetUrl);
+      } catch (mailError) {
+        // Don't leak the "email isn't configured" detail to the client —
+        // that would tell an attacker whether the account exists. Log it
+        // server-side so whoever's watching the logs can fix the setup.
+        console.error("❌ Password reset email failed to send:", mailError.message);
+      }
+    }
+
+    res.json({ success: true, message: "If that email is registered, a reset link has been sent to it." });
+  } catch (error) {
+    console.error("❌ Forgot Password Error:", error);
+    res.status(500).json({ success: false, message: "Internal Server Error" });
+  }
+};
+
+// Completes the reset: verifies the token from the emailed link, then sets
+// the new password.
+const resetPassword = async (req, res) => {
+  try {
+    const { token, password } = req.body;
+    if (!token || !password) {
+      return res.status(400).json({ success: false, message: "Missing reset token or new password" });
+    }
+    if (password.length < 6) {
+      return res.status(400).json({ success: false, message: "Password must be at least 6 characters" });
+    }
+
+    let payload;
+    try {
+      payload = jwt.verify(token, process.env.JWT_SECRET);
+    } catch (jwtError) {
+      return res.status(400).json({ success: false, message: "This reset link is invalid or has expired — please request a new one." });
+    }
+    if (payload.purpose !== "password-reset") {
+      return res.status(400).json({ success: false, message: "Invalid reset link" });
+    }
+
+    const user = await findUserById(payload.id);
+    if (!user) {
+      return res.status(404).json({ success: false, message: "That account no longer exists" });
+    }
+
+    await updateUserPassword(user.id, password);
+    res.json({ success: true, message: "Password updated — you can now log in with your new password." });
+  } catch (error) {
+    console.error("❌ Reset Password Error:", error);
+    res.status(500).json({ success: false, message: "Internal Server Error" });
+  }
+};
+
+export { registerUser, loginUser, getUserProfile, forgotPassword, resetPassword };

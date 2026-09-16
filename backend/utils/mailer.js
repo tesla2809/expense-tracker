@@ -1,42 +1,48 @@
 import nodemailer from "nodemailer";
 
+// Sends the password-reset email via Gmail SMTP (a personal/free Gmail
+// account works fine — no paid email service needed). Follows the same
+// graceful pattern as the rest of this app's optional integrations: never
+// throws on missing config, warns once, and callers get a clear
+// "not configured" error to show the user instead of a crash.
 let transporter = null;
 let warnedMissingConfig = false;
 
 const getTransporter = () => {
   if (transporter) return transporter;
-  const { SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS } = process.env;
-  if (!SMTP_HOST || !SMTP_USER || !SMTP_PASS) return null;
-
+  const user = process.env.EMAIL_USER;
+  const pass = process.env.EMAIL_APP_PASSWORD;
+  if (!user || !pass) {
+    if (!warnedMissingConfig) {
+      console.warn(
+        "⚠️  Password-reset email isn't configured — set EMAIL_USER and EMAIL_APP_PASSWORD in backend/.env (see backend/.env.example)."
+      );
+      warnedMissingConfig = true;
+    }
+    return null;
+  }
   transporter = nodemailer.createTransport({
-    host: SMTP_HOST,
-    port: Number(SMTP_PORT) || 587,
-    secure: Number(SMTP_PORT) === 465,
-    auth: { user: SMTP_USER, pass: SMTP_PASS },
+    service: "gmail",
+    auth: { user, pass },
   });
   return transporter;
 };
 
-// Never throws — email is a nice-to-have, not something that should ever
-// break the daily job or crash the server. Warns once if SMTP isn't
-// configured, then quietly no-ops on every call after that.
-export const sendMail = async ({ to, subject, html, text }) => {
+export const isEmailConfigured = () => !!getTransporter();
+
+export const sendPasswordResetEmail = async (toEmail, resetUrl) => {
   const t = getTransporter();
   if (!t) {
-    if (!warnedMissingConfig) {
-      console.warn(
-        "⚠️  Email reminders are not configured — set SMTP_HOST, SMTP_PORT, SMTP_USER and SMTP_PASS (and optionally EMAIL_FROM) to enable them."
-      );
-      warnedMissingConfig = true;
-    }
-    return { sent: false, reason: "not_configured" };
+    throw new Error("Password-reset email isn't configured on the server yet.");
   }
-
-  try {
-    await t.sendMail({ from: process.env.EMAIL_FROM || process.env.SMTP_USER, to, subject, html, text });
-    return { sent: true };
-  } catch (error) {
-    console.error("Error sending email:", error.message);
-    return { sent: false, reason: error.message };
-  }
+  await t.sendMail({
+    from: `"Kushal Timbers Expense Tracker" <${process.env.EMAIL_USER}>`,
+    to: toEmail,
+    subject: "Reset your password — Kushal Timbers Expense Tracker",
+    html: `
+      <p>Someone (hopefully you) asked to reset the password for this account.</p>
+      <p><a href="${resetUrl}">Click here to choose a new password</a>. This link works for 15 minutes.</p>
+      <p>If you didn't request this, you can safely ignore this email — your password won't change.</p>
+    `,
+  });
 };

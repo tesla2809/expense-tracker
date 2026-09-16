@@ -36,6 +36,19 @@ export const uploadBill = multer({
   limits: { fileSize: MAX_FILE_SIZE_BYTES },
 }).single("bill");
 
+// A vehicle can have up to 3 documents attached at once (RC, insurance,
+// permit) — each optional, each its own named field, same file rules as a
+// bill upload.
+export const uploadVehicleDocs = multer({
+  storage,
+  fileFilter,
+  limits: { fileSize: MAX_FILE_SIZE_BYTES },
+}).fields([
+  { name: "rcFile", maxCount: 1 },
+  { name: "insuranceFile", maxCount: 1 },
+  { name: "permitFile", maxCount: 1 },
+]);
+
 // --- Spreadsheet import (expense/income sheet upload) ---
 // Kept in memory only (never written to disk) since we just parse it once
 // and discard it — the parsed rows are what gets saved, not the file itself.

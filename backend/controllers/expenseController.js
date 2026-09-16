@@ -13,7 +13,7 @@ const billFilePath = (req) => (req.file ? `/uploads/${req.file.filename}` : unde
 
 // Add Expense (one row of the sheet)
 export const addExpense = async (req, res) => {
-  const { date, expense, amount, master } = req.body;
+  const { date, expense, amount, master, vehicleId } = req.body;
 
   if (!expense || !amount || !master) {
     return res.status(400).json({ message: "Expense, amount and master are required" });
@@ -27,6 +27,7 @@ export const addExpense = async (req, res) => {
       amount,
       master,
       billFile: billFilePath(req),
+      vehicleId,
     });
     res.status(201).json(doc);
   } catch (error) {
@@ -88,7 +89,7 @@ export const getMonthlyTrend = async (req, res) => {
 
 // Update Expense (editing a cell/row in the sheet)
 export const updateExpense = async (req, res) => {
-  const { date, expense, amount, master } = req.body;
+  const { date, expense, amount, master, vehicleId } = req.body;
 
   try {
     const updates = {};
@@ -96,6 +97,7 @@ export const updateExpense = async (req, res) => {
     if (expense !== undefined) updates.expense = expense;
     if (amount !== undefined) updates.amount = Number(amount);
     if (master !== undefined) updates.master = master;
+    if (vehicleId !== undefined) updates.vehicleId = vehicleId;
 
     if (req.file) {
       // Best-effort cleanup of the previous bill file, if any.

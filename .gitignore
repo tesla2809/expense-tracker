@@ -4,3 +4,11 @@ backend/.env
 frontend/.env
 dist
 build
+
+# Google service account key — NEVER commit this
+key.txt
+*service-account*.json
+*serviceaccount*.json
+
+# Uploaded bills / vehicle documents
+backend/uploads

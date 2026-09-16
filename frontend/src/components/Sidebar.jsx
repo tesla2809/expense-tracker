@@ -6,12 +6,14 @@ import {
   LayoutDashboard,
   Sheet,
   PieChart,
+  Truck,
   X,
 } from 'lucide-react';
 
 const NAV_ITEMS = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, end: true },
   { to: '/dashboard/expenses', label: 'Expense Sheet', icon: Sheet },
+  { to: '/dashboard/vehicles', label: 'Vehicles', icon: Truck },
 ];
 
 // isOpen/onClose control the mobile/tablet off-canvas drawer only — on

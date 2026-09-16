@@ -58,6 +58,13 @@ const friendly = async (fn, action) => {
 
 // Creates the tab if it doesn't exist yet, and writes the header row if the
 // tab is empty. Safe to call every time the server starts.
+//
+// Also handles the "we added a new column to an already-live sheet" case:
+// if the existing header row is shorter than the `headers` this version of
+// the code expects (e.g. adding `vehicleId` to a Sheet that was already
+// created with the older, shorter header list), it writes ONLY the missing
+// header cells onto the end of row 1 — existing columns, and every row of
+// data under them, are left completely untouched.
 export const ensureSheetTab = async (sheetName, headers) => {
   const client = requireClient();
   const spreadsheetId = getSpreadsheetId();
@@ -80,7 +87,10 @@ export const ensureSheetTab = async (sheetName, headers) => {
     () => client.spreadsheets.values.get({ spreadsheetId, range: headerRange }),
     `reading the "${sheetName}" header`
   );
-  if (!current.data.values || current.data.values.length === 0) {
+  const currentHeaderRow = current.data.values?.[0] || [];
+
+  if (currentHeaderRow.length === 0) {
+    // Brand new tab — write the full header row.
     await friendly(
       () =>
         client.spreadsheets.values.update({
@@ -90,6 +100,22 @@ export const ensureSheetTab = async (sheetName, headers) => {
           requestBody: { values: [headers] },
         }),
       `writing the "${sheetName}" header`
+    );
+  } else if (currentHeaderRow.length < headers.length) {
+    // Existing tab, but the code now expects more columns than it has —
+    // append just the new header names after the existing ones.
+    const missingHeaders = headers.slice(currentHeaderRow.length);
+    const startCol = colLetter(currentHeaderRow.length);
+    const endCol = colLetter(headers.length - 1);
+    await friendly(
+      () =>
+        client.spreadsheets.values.update({
+          spreadsheetId,
+          range: `${sheetName}!${startCol}1:${endCol}1`,
+          valueInputOption: "RAW",
+          requestBody: { values: [missingHeaders] },
+        }),
+      `extending the "${sheetName}" header with new columns`
     );
   }
 };

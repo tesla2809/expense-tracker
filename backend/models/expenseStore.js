@@ -6,12 +6,14 @@ import crypto from "crypto";
 import { ensureSheetTab, getAllRows, appendRow, appendRows, updateRowAt, deleteRowAt } from "../utils/sheetsDb.js";
 
 const SHEET_NAME = "Expenses";
-const HEADERS = ["id", "userId", "date", "expense", "amount", "master", "billFile", "createdAt", "updatedAt"];
+const HEADERS = ["id", "userId", "date", "expense", "amount", "master", "billFile", "createdAt", "updatedAt", "vehicleId"];
 
 export const ensureExpensesSheet = () => ensureSheetTab(SHEET_NAME, HEADERS);
 
 // Shapes a raw sheet row into the object the frontend already expects
 // (it was built against Mongoose documents, so `_id` is kept as an alias).
+// vehicleId is "" for a normal expense, or a Vehicle's id for one logged
+// against a specific vehicle from the Vehicles page.
 const toExpense = (row) => ({
   _id: row.id,
   id: row.id,
@@ -23,6 +25,7 @@ const toExpense = (row) => ({
   billFile: row.billFile || null,
   createdAt: row.createdAt,
   updatedAt: row.updatedAt,
+  vehicleId: row.vehicleId || null,
 });
 
 const timeOf = (d) => {
@@ -38,7 +41,7 @@ export const listExpensesByUser = async (userId) => {
     .sort((a, b) => timeOf(b.date) - timeOf(a.date) || timeOf(b.createdAt) - timeOf(a.createdAt));
 };
 
-export const createExpense = async ({ userId, date, expense, amount, master, billFile }) => {
+export const createExpense = async ({ userId, date, expense, amount, master, billFile, vehicleId }) => {
   const now = new Date().toISOString();
   const row = {
     id: crypto.randomUUID(),
@@ -50,6 +53,7 @@ export const createExpense = async ({ userId, date, expense, amount, master, bil
     billFile: billFile || "",
     createdAt: now,
     updatedAt: now,
+    vehicleId: vehicleId || "",
   };
   await appendRow(SHEET_NAME, HEADERS, row);
   return toExpense(row);

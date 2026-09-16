@@ -6,6 +6,7 @@ import { fetchSheetsStatus, exportToGoogleSheet, previewFromGoogleSheet } from "
 import { API_BASE_URL } from "/src/api/config";
 import { DEFAULT_EXPENSE_MASTERS } from "/src/constants/categories";
 import { downloadCsv } from "/src/utils/exportCsv";
+import MasterAutocomplete from "/src/components/MasterAutocomplete";
 import {
   FiPlus,
   FiTrash2,
@@ -18,6 +19,8 @@ import {
   FiSearch,
   FiChevronDown,
   FiChevronRight,
+  FiFilter,
+  FiXCircle,
 } from "react-icons/fi";
 import { ToastContainer, toast } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
@@ -52,6 +55,33 @@ const Expenses = () => {
   const [search, setSearch] = useState("");
   const [groupBy, setGroupBy] = useState("none"); // "none" | "date" | "master"
   const [collapsedGroups, setCollapsedGroups] = useState(() => new Set());
+
+  // --- Filter toolbar: Master + date range + amount range, all layered on top of search ---
+  const [showFilters, setShowFilters] = useState(false);
+  const [filterMaster, setFilterMaster] = useState("");
+  const [filterDateFrom, setFilterDateFrom] = useState("");
+  const [filterDateTo, setFilterDateTo] = useState("");
+  const [filterAmountMin, setFilterAmountMin] = useState("");
+  const [filterAmountMax, setFilterAmountMax] = useState("");
+
+  const activeFilterCount = [filterMaster, filterDateFrom, filterDateTo, filterAmountMin, filterAmountMax].filter(
+    (v) => v !== ""
+  ).length;
+
+  const clearFilters = () => {
+    setFilterMaster("");
+    setFilterDateFrom("");
+    setFilterDateTo("");
+    setFilterAmountMin("");
+    setFilterAmountMax("");
+  };
+
+  // Masters actually present in the sheet right now — keeps the filter dropdown
+  // relevant to what's searchable instead of showing every preset category.
+  const presentMasters = useMemo(() => {
+    const set = new Set(rows.map((r) => r.master).filter(Boolean));
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [rows]);
 
   const [showImportModal, setShowImportModal] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
@@ -98,14 +128,24 @@ const Expenses = () => {
 
   const total = useMemo(() => rows.reduce((sum, r) => sum + (Number(r.amount) || 0), 0), [rows]);
 
-  // --- Search + group-by (display only — never affects what's actually stored) ---
+  // --- Search + filters + group-by (display only — never affects what's actually stored) ---
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return rows;
-    return rows.filter(
-      (r) => (r.expense || "").toLowerCase().includes(q) || (r.master || "").toLowerCase().includes(q)
-    );
-  }, [rows, search]);
+    const min = filterAmountMin !== "" ? Number(filterAmountMin) : null;
+    const max = filterAmountMax !== "" ? Number(filterAmountMax) : null;
+    return rows.filter((r) => {
+      if (q && !(r.expense || "").toLowerCase().includes(q) && !(r.master || "").toLowerCase().includes(q)) {
+        return false;
+      }
+      if (filterMaster && r.master !== filterMaster) return false;
+      if (filterDateFrom && (!r.date || new Date(r.date) < new Date(filterDateFrom))) return false;
+      if (filterDateTo && (!r.date || new Date(r.date) > new Date(filterDateTo))) return false;
+      const amount = Number(r.amount) || 0;
+      if (min !== null && amount < min) return false;
+      if (max !== null && amount > max) return false;
+      return true;
+    });
+  }, [rows, search, filterMaster, filterDateFrom, filterDateTo, filterAmountMin, filterAmountMax]);
 
   const groupedRows = useMemo(() => {
     if (groupBy === "none") return null;
@@ -343,7 +383,7 @@ const Expenses = () => {
           </div>
         </div>
 
-        {/* Search + group-by toolbar */}
+        {/* Search + filter + group-by toolbar */}
         <div className="flex flex-col sm:flex-row gap-3 mb-4">
           <div className="relative flex-1">
             <FiSearch size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
@@ -355,6 +395,22 @@ const Expenses = () => {
               className="w-full bg-white border border-gray-300 rounded-lg pl-9 pr-3 py-2.5 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-red-400"
             />
           </div>
+          <button
+            onClick={() => setShowFilters((v) => !v)}
+            className={`flex items-center gap-2 border rounded-lg shadow-sm px-3 py-2.5 text-sm font-medium ${
+              showFilters || activeFilterCount > 0
+                ? "bg-red-50 border-red-300 text-red-700"
+                : "bg-white border-gray-300 text-gray-700 hover:bg-gray-50"
+            }`}
+          >
+            <FiFilter size={15} />
+            Filters
+            {activeFilterCount > 0 && (
+              <span className="bg-red-600 text-white text-[10px] font-bold rounded-full w-4 h-4 flex items-center justify-center">
+                {activeFilterCount}
+              </span>
+            )}
+          </button>
           <div className="flex items-center gap-2 bg-white border border-gray-300 rounded-lg shadow-sm px-3 py-2.5">
             <span className="text-xs font-medium text-gray-500 whitespace-nowrap">Group by</span>
             <select
@@ -368,6 +424,77 @@ const Expenses = () => {
             </select>
           </div>
         </div>
+
+        {showFilters && (
+          <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-4 mb-4">
+            <div className="flex flex-wrap items-end gap-4">
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Master</label>
+                <select
+                  value={filterMaster}
+                  onChange={(e) => setFilterMaster(e.target.value)}
+                  className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 min-w-[10rem]"
+                >
+                  <option value="">All masters</option>
+                  {presentMasters.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">From date</label>
+                <input
+                  type="date"
+                  value={filterDateFrom}
+                  onChange={(e) => setFilterDateFrom(e.target.value)}
+                  className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">To date</label>
+                <input
+                  type="date"
+                  value={filterDateTo}
+                  onChange={(e) => setFilterDateTo(e.target.value)}
+                  className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Min amount</label>
+                <input
+                  type="number"
+                  min="0"
+                  value={filterAmountMin}
+                  onChange={(e) => setFilterAmountMin(e.target.value)}
+                  placeholder="0"
+                  className="w-28 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Max amount</label>
+                <input
+                  type="number"
+                  min="0"
+                  value={filterAmountMax}
+                  onChange={(e) => setFilterAmountMax(e.target.value)}
+                  placeholder="Any"
+                  className="w-28 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
+                />
+              </div>
+              {activeFilterCount > 0 && (
+                <button
+                  onClick={clearFilters}
+                  className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-red-600 font-medium pb-2"
+                >
+                  <FiXCircle size={15} />
+                  Clear filters
+                </button>
+              )}
+            </div>
+          </div>
+        )}
 
         <div className="bg-white shadow-lg rounded-xl border border-gray-200 overflow-hidden">
           {loading ? (
@@ -461,7 +588,9 @@ const Expenses = () => {
                   {filteredRows.length === 0 && !loading && (
                     <tr>
                       <td colSpan={6} className="px-4 py-10 text-center text-gray-400">
-                        {rows.length === 0 ? "No expenses yet — start typing in the row above." : "No expenses match your search."}
+                        {rows.length === 0
+                          ? "No expenses yet — start typing in the row above."
+                          : "No expenses match your search/filters."}
                       </td>
                     </tr>
                   )}
@@ -512,90 +641,6 @@ const Expenses = () => {
       )}
 
       {showExportModal && <ExportModal onClose={() => setShowExportModal(false)} />}
-    </div>
-  );
-};
-
-// --- Master autocomplete: a prominent suggestion dropdown (not just a native
-// datalist) that filters the known masters as the user types, so entry stays
-// fast without having to remember/retype an existing ledger head exactly. ---
-const MasterAutocomplete = ({ value, onChange, onBlur, onKeyDown, masters, inputRef, placeholder, className }) => {
-  const [open, setOpen] = useState(false);
-  const [highlight, setHighlight] = useState(0);
-  const blurTimeout = useRef(null);
-
-  const matches = useMemo(() => {
-    const q = (value || "").trim().toLowerCase();
-    const pool = masters?.length ? masters : DEFAULT_EXPENSE_MASTERS;
-    if (!q) return pool.slice(0, 8);
-    return pool.filter((m) => m.toLowerCase().includes(q)).slice(0, 8);
-  }, [value, masters]);
-
-  const selectMaster = (m) => {
-    onChange(m);
-    setOpen(false);
-  };
-
-  const handleKeyDown = (e) => {
-    if (open && matches.length > 0 && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
-      e.preventDefault();
-      setHighlight((h) => (e.key === "ArrowDown" ? (h + 1) % matches.length : (h - 1 + matches.length) % matches.length));
-      return;
-    }
-    if (open && matches.length > 0 && e.key === "Enter" && matches[highlight] && matches[highlight] !== value) {
-      // First Enter accepts the highlighted suggestion; a second Enter then
-      // moves on/commits, same as most spreadsheet/autocomplete UIs.
-      e.preventDefault();
-      selectMaster(matches[highlight]);
-      return;
-    }
-    if (e.key === "Escape") {
-      setOpen(false);
-      return;
-    }
-    onKeyDown?.(e);
-  };
-
-  return (
-    <div className="relative">
-      <input
-        ref={inputRef}
-        type="text"
-        autoComplete="off"
-        value={value}
-        onChange={(e) => {
-          onChange(e.target.value);
-          setOpen(true);
-          setHighlight(0);
-        }}
-        onFocus={() => setOpen(true)}
-        onBlur={(e) => {
-          // Delay closing so a click on a suggestion (onMouseDown below)
-          // registers before the dropdown disappears.
-          blurTimeout.current = setTimeout(() => setOpen(false), 120);
-          onBlur?.(e);
-        }}
-        onKeyDown={handleKeyDown}
-        placeholder={placeholder}
-        className={className}
-      />
-      {open && matches.length > 0 && (
-        <div className="absolute z-20 left-0 right-0 mt-1 max-h-48 overflow-y-auto bg-white border border-gray-200 rounded-md shadow-lg text-sm">
-          {matches.map((m, i) => (
-            <div
-              key={m}
-              onMouseDown={(e) => {
-                e.preventDefault();
-                clearTimeout(blurTimeout.current);
-                selectMaster(m);
-              }}
-              className={`px-3 py-1.5 cursor-pointer ${i === highlight ? "bg-red-50 text-red-700" : "hover:bg-gray-50 text-gray-700"}`}
-            >
-              {m}
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   );
 };
