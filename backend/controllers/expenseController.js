@@ -1,200 +1,165 @@
 import fs from "fs";
 import path from "path";
-import Expense from "../models/Expense.js";
-import { PAYMENT_STATUSES } from "../constants/categories.js";
+import {
+  listExpensesByUser,
+  createExpense,
+  updateExpenseById,
+  deleteExpenseById,
+  bulkCreateExpenses,
+} from "../models/expenseStore.js";
 import { UPLOADS_DIR } from "../middleware/uploadMiddleware.js";
-import { isValidCategory, resolveGst } from "../utils/categoryValidation.js";
-
-// "Pending" without a status field being sent at all should still mean Paid
-// (that's the common case, and keeps old clients/imports working unchanged).
-const resolvePaymentStatus = (paymentStatus) =>
-  PAYMENT_STATUSES.includes(paymentStatus) ? paymentStatus : "Paid";
-
-const resolveCategory = async (userId, category, customCategory) => {
-  if (!category || !(await isValidCategory(userId, "expense", category))) {
-    return { error: "A valid category is required" };
-  }
-  if (category === "Other" && !customCategory?.trim()) {
-    return { error: "Please specify the category when choosing 'Other'" };
-  }
-  return { category, customCategory: category === "Other" ? customCategory.trim() : undefined };
-};
 
 const billFilePath = (req) => (req.file ? `/uploads/${req.file.filename}` : undefined);
 
-// Add Expense
+// Add Expense (one row of the sheet)
 export const addExpense = async (req, res) => {
-  const {
-    title,
-    amount,
-    category,
-    customCategory,
-    party,
-    paymentMode,
-    paymentStatus,
-    dueDate,
-    gstApplicable,
-    gstRate,
-    notes,
-    date,
-  } = req.body;
+  const { date, expense, amount, master } = req.body;
 
-  if (!title || !amount) {
-    return res.status(400).json({ message: "Title and amount are required" });
+  if (!expense || !amount || !master) {
+    return res.status(400).json({ message: "Expense, amount and master are required" });
   }
-
-  const resolved = await resolveCategory(req.user.id, category, customCategory);
-  if (resolved.error) {
-    return res.status(400).json({ message: resolved.error });
-  }
-
-  const status = resolvePaymentStatus(paymentStatus);
-  const gst = resolveGst(gstApplicable, gstRate, amount);
 
   try {
-    const expense = await Expense.create({
-      user: req.user.id,
-      title,
-      amount,
-      category: resolved.category,
-      customCategory: resolved.customCategory,
-      party,
-      paymentMode,
-      paymentStatus: status,
-      dueDate: status === "Pending" && dueDate ? dueDate : null,
-      ...gst,
-      notes,
-      billFile: billFilePath(req),
+    const doc = await createExpense({
+      userId: req.user.id,
       date: date || new Date(),
+      expense,
+      amount,
+      master,
+      billFile: billFilePath(req),
     });
-
-    res.status(201).json(expense);
+    res.status(201).json(doc);
   } catch (error) {
     console.error("Error adding expense:", error);
-    res.status(500).json({ message: "Error adding expense", error: error.message });
+    res.status(500).json({ message: error.message || "Error adding expense" });
   }
 };
 
-// Get All Expenses (for the logged-in user)
+// Get All Expenses (for the logged-in user), most recent first
 export const getExpenses = async (req, res) => {
   try {
-    const expenses = await Expense.find({ user: req.user.id }).sort({ date: -1 });
+    const expenses = await listExpensesByUser(req.user.id);
     res.json(expenses);
   } catch (error) {
     console.error("Error fetching expenses:", error);
-    res.status(500).json({ message: "Error fetching expenses", error: error.message });
+    res.status(500).json({ message: error.message || "Error fetching expenses" });
   }
 };
 
-// Category-wise totals, for the reports/dashboard view
+// Master-wise totals, for the dashboard's breakdown chart
 export const getExpenseSummary = async (req, res) => {
   try {
-    const expenses = await Expense.find({ user: req.user.id });
+    const expenses = await listExpensesByUser(req.user.id);
     const totals = {};
     for (const e of expenses) {
-      const label = e.category === "Other" ? e.customCategory || "Other" : e.category;
-      totals[label] = (totals[label] || 0) + e.amount;
+      totals[e.master] = (totals[e.master] || 0) + e.amount;
     }
     res.json(totals);
   } catch (error) {
     console.error("Error building expense summary:", error);
-    res.status(500).json({ message: "Error building expense summary", error: error.message });
+    res.status(500).json({ message: error.message || "Error building expense summary" });
   }
 };
 
-// Update Expense
+// Last N months of totals, for the dashboard's trend chart
+export const getMonthlyTrend = async (req, res) => {
+  const months = Math.min(24, Math.max(1, parseInt(req.query.months, 10) || 6));
+  try {
+    const expenses = await listExpensesByUser(req.user.id);
+    const now = new Date();
+    const buckets = [];
+    for (let i = months - 1; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      buckets.push({ key: `${d.getFullYear()}-${d.getMonth()}`, label: d.toLocaleDateString("en-IN", { month: "short", year: "2-digit" }), total: 0 });
+    }
+    const bucketByKey = new Map(buckets.map((b) => [b.key, b]));
+    for (const e of expenses) {
+      const d = new Date(e.date);
+      const key = `${d.getFullYear()}-${d.getMonth()}`;
+      const bucket = bucketByKey.get(key);
+      if (bucket) bucket.total += e.amount;
+    }
+    res.json(buckets.map(({ label, total }) => ({ label, total })));
+  } catch (error) {
+    console.error("Error building monthly trend:", error);
+    res.status(500).json({ message: error.message || "Error building monthly trend" });
+  }
+};
+
+// Update Expense (editing a cell/row in the sheet)
 export const updateExpense = async (req, res) => {
-  const {
-    title,
-    amount,
-    category,
-    customCategory,
-    party,
-    paymentMode,
-    paymentStatus,
-    dueDate,
-    gstApplicable,
-    gstRate,
-    notes,
-    date,
-  } = req.body;
+  const { date, expense, amount, master } = req.body;
 
   try {
-    const expense = await Expense.findById(req.params.id);
-    if (!expense) return res.status(404).json({ message: "Expense not found" });
-
-    if (expense.user.toString() !== req.user.id)
-      return res.status(403).json({ message: "Not authorized to update this expense" });
-
-    if (category) {
-      const resolved = await resolveCategory(req.user.id, category, customCategory);
-      if (resolved.error) {
-        return res.status(400).json({ message: resolved.error });
-      }
-      expense.category = resolved.category;
-      expense.customCategory = resolved.customCategory;
-    }
-
-    expense.title = title || expense.title;
-    expense.amount = amount || expense.amount;
-    expense.party = party !== undefined ? party : expense.party;
-    expense.paymentMode = paymentMode || expense.paymentMode;
-    expense.notes = notes !== undefined ? notes : expense.notes;
-    expense.date = date || expense.date;
-
-    if (paymentStatus !== undefined) {
-      expense.paymentStatus = resolvePaymentStatus(paymentStatus);
-      expense.dueDate = expense.paymentStatus === "Pending" && dueDate ? dueDate : null;
-      // A payment that's no longer Pending doesn't need a reminder anymore.
-      if (expense.paymentStatus !== "Pending") expense.lastReminderSentAt = null;
-    }
-
-    if (gstApplicable !== undefined || gstRate !== undefined) {
-      const gst = resolveGst(
-        gstApplicable !== undefined ? gstApplicable : expense.gstApplicable,
-        gstRate !== undefined ? gstRate : expense.gstRate,
-        expense.amount
-      );
-      expense.gstApplicable = gst.gstApplicable;
-      expense.gstRate = gst.gstRate;
-      expense.gstAmount = gst.gstAmount;
-    }
+    const updates = {};
+    if (date !== undefined) updates.date = date;
+    if (expense !== undefined) updates.expense = expense;
+    if (amount !== undefined) updates.amount = Number(amount);
+    if (master !== undefined) updates.master = master;
 
     if (req.file) {
-      // Replace the old bill file, if any
-      if (expense.billFile) {
-        const oldPath = path.join(UPLOADS_DIR, path.basename(expense.billFile));
-        fs.unlink(oldPath, () => {});
+      // Best-effort cleanup of the previous bill file, if any.
+      const existing = (await listExpensesByUser(req.user.id)).find((e) => e._id === req.params.id);
+      if (existing?.billFile) {
+        fs.unlink(path.join(UPLOADS_DIR, path.basename(existing.billFile)), () => {});
       }
-      expense.billFile = billFilePath(req);
+      updates.billFile = billFilePath(req);
     }
 
-    const updatedExpense = await expense.save();
-    res.json(updatedExpense);
+    const { expense: updated, error } = await updateExpenseById(req.params.id, req.user.id, updates);
+    if (error === "not_found") return res.status(404).json({ message: "Expense not found" });
+    if (error === "forbidden") return res.status(403).json({ message: "Not authorized to update this expense" });
+    res.json(updated);
   } catch (error) {
     console.error("Error updating expense:", error);
-    res.status(500).json({ message: "Error updating expense", error: error.message });
+    res.status(500).json({ message: error.message || "Error updating expense" });
   }
 };
 
 // Delete Expense
 export const deleteExpense = async (req, res) => {
   try {
-    const expense = await Expense.findById(req.params.id);
-    if (!expense) return res.status(404).json({ message: "Expense not found" });
+    const { expense: deleted, error } = await deleteExpenseById(req.params.id, req.user.id);
+    if (error === "not_found") return res.status(404).json({ message: "Expense not found" });
+    if (error === "forbidden") return res.status(403).json({ message: "Not authorized to delete this expense" });
 
-    if (expense.user.toString() !== req.user.id)
-      return res.status(403).json({ message: "Not authorized to delete this expense" });
-
-    if (expense.billFile) {
-      const filePath = path.join(UPLOADS_DIR, path.basename(expense.billFile));
-      fs.unlink(filePath, () => {});
+    if (deleted?.billFile) {
+      fs.unlink(path.join(UPLOADS_DIR, path.basename(deleted.billFile)), () => {});
     }
 
-    await expense.deleteOne();
     res.json({ message: "Expense deleted successfully" });
   } catch (error) {
     console.error("Error deleting expense:", error);
-    res.status(500).json({ message: "Error deleting expense", error: error.message });
+    res.status(500).json({ message: error.message || "Error deleting expense" });
+  }
+};
+
+// Bulk add — used when committing an imported/reviewed batch of sheet rows
+// (from a file upload or a Google Sheet) in one call instead of one HTTP
+// request per row.
+export const bulkAddExpenses = async (req, res) => {
+  const { rows } = req.body;
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return res.status(400).json({ message: "No rows to import" });
+  }
+
+  const toInsert = [];
+  const skipped = [];
+  rows.forEach((row, i) => {
+    const amount = Number(row.amount);
+    if (row.include === false) return;
+    if (!row.expense || !row.master || !amount || isNaN(amount) || amount <= 0) {
+      skipped.push({ row: i + 1, reason: "Missing or invalid expense/amount/master" });
+      return;
+    }
+    toInsert.push({ date: row.date, expense: row.expense, amount, master: row.master });
+  });
+
+  try {
+    const saved = toInsert.length ? await bulkCreateExpenses(req.user.id, toInsert) : [];
+    res.status(201).json({ imported: saved.length, skipped });
+  } catch (error) {
+    console.error("Error bulk-adding expenses:", error);
+    res.status(500).json({ message: error.message || "Some rows failed to save" });
   }
 };

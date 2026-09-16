@@ -80,3 +80,30 @@ export const deleteExpense = async (expenseId) => {
     throw new Error(error.response?.data?.message || "Failed to delete expense.");
   }
 };
+
+/**
+ * Last N months of expense totals, for the dashboard trend chart
+ */
+export const fetchMonthlyTrend = async (months = 6) => {
+  try {
+    const response = await apiClient.get(`${BASE_URL}/monthly-trend`, { params: { months } });
+    return response.data;
+  } catch (error) {
+    console.error("Error fetching monthly trend:", error.response?.data || error);
+    throw new Error(error.response?.data?.message || "Failed to fetch the monthly trend.");
+  }
+};
+
+/**
+ * Save a batch of reviewed rows (from a file/Google Sheet import preview) as
+ * real expense entries in one call. A row with `include: false` is skipped.
+ */
+export const bulkAddExpenses = async (rows) => {
+  try {
+    const response = await apiClient.post(`${BASE_URL}/bulk`, { rows });
+    return response.data;
+  } catch (error) {
+    console.error("Error bulk-adding expenses:", error.response?.data || error);
+    throw new Error(error.response?.data?.message || "Failed to save the imported rows.");
+  }
+};

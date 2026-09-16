@@ -1,28 +1,15 @@
 import { apiClient } from "./config";
-import {
-  DEFAULT_EXPENSE_CATEGORIES,
-  DEFAULT_INCOME_CATEGORIES,
-  DEFAULT_PAYMENT_MODES,
-  DEFAULT_GST_RATES,
-  DEFAULT_INVENTORY_UNITS,
-} from "../constants/categories";
+import { DEFAULT_EXPENSE_MASTERS } from "../constants/categories";
 
-// Fetches the canonical category/payment-mode lists from the backend
-// (merged with the logged-in user's own custom categories, if any). Falls
-// back to the local defaults if the server can't be reached, so the forms
-// still work offline / while the backend is starting up.
-export const fetchCategories = async () => {
+// Fetches the Master-column suggestion list from the backend. Falls back to
+// the local defaults if the server can't be reached, so the sheet still
+// works offline / while the backend is starting up.
+export const fetchMasters = async () => {
   try {
-    const response = await apiClient.get("/meta/categories");
-    return response.data;
+    const response = await apiClient.get("/meta/masters");
+    return response.data.masters || DEFAULT_EXPENSE_MASTERS;
   } catch (error) {
-    console.error("Falling back to default categories:", error);
-    return {
-      expenseCategories: DEFAULT_EXPENSE_CATEGORIES,
-      incomeCategories: DEFAULT_INCOME_CATEGORIES,
-      paymentModes: DEFAULT_PAYMENT_MODES,
-      gstRates: DEFAULT_GST_RATES,
-      inventoryUnits: DEFAULT_INVENTORY_UNITS,
-    };
+    console.error("Falling back to default masters:", error);
+    return DEFAULT_EXPENSE_MASTERS;
   }
 };

@@ -78,8 +78,19 @@ export const AuthProvider = ({ children }) => {
     setError(null);
   };
 
+  // Merges profile changes (e.g. from Settings > Profile) into the locally
+  // held user object, so the rest of the app (Sidebar, etc.) reflects them
+  // immediately without a page reload.
+  const updateUser = (partialUser) => {
+    setUser((prev) => {
+      const merged = { ...(prev || {}), ...partialUser };
+      localStorage.setItem("user", JSON.stringify(merged));
+      return merged;
+    });
+  };
+
   return (
-    <AuthContext.Provider value={{ user, login, signup, logout, loading, error }}>
+    <AuthContext.Provider value={{ user, login, signup, logout, loading, error, updateUser }}>
       {children}
     </AuthContext.Provider>
   );

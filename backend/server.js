@@ -1,35 +1,23 @@
 import path from "path";
 import { fileURLToPath } from "url";
 import express from "express";
-import mongoose from "mongoose";
 import dotenv from "dotenv";
 import cors from "cors";
 import helmet from "helmet";
-import cron from "node-cron";
-import connectDB from "./config/db.js";
 import userRoutes from "./routes/userRoutes.js";
-import incomeRoutes from "./routes/incomeRoutes.js";
 import expenseRoutes from "./routes/expenseRoutes.js";
 import metaRoutes from "./routes/metaRoutes.js";
 import importRoutes from "./routes/importRoutes.js";
-import partyRoutes from "./routes/partyRoutes.js";
-import reportRoutes from "./routes/reportRoutes.js";
-import categoryRoutes from "./routes/categoryRoutes.js";
-import budgetRoutes from "./routes/budgetRoutes.js";
-import recurringRoutes from "./routes/recurringRoutes.js";
-import wageRoutes from "./routes/wageRoutes.js";
-import inventoryRoutes from "./routes/inventoryRoutes.js";
-import cronRoutes from "./routes/cronRoutes.js";
+import sheetsRoutes from "./routes/sheetsRoutes.js";
 import { UPLOADS_DIR } from "./middleware/uploadMiddleware.js";
-import { runDailyTasks } from "./utils/dailyTasks.js";
+import { isSheetsDbConfigured } from "./utils/sheetsDb.js";
+import { ensureUsersSheet } from "./models/userStore.js";
+import { ensureExpensesSheet } from "./models/expenseStore.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Load environment variables
 dotenv.config();
-
-// Connect to database
-connectDB();
 
 // Initialize Express app
 const app = express();
@@ -69,29 +57,20 @@ app.use(
 // Serve uploaded bill/invoice files
 app.use("/uploads", express.static(UPLOADS_DIR));
 
-// API Routes
+// API Routes — deliberately just what the sheet page + dashboard need.
 app.use("/api/auth", userRoutes);
-app.use("/api/incomes", incomeRoutes);
 app.use("/api/expenses", expenseRoutes);
 app.use("/api/meta", metaRoutes);
 app.use("/api/imports", importRoutes);
-app.use("/api/parties", partyRoutes);
-app.use("/api/reports", reportRoutes);
-app.use("/api/categories", categoryRoutes);
-app.use("/api/budgets", budgetRoutes);
-app.use("/api/recurring", recurringRoutes);
-app.use("/api/wages", wageRoutes);
-app.use("/api/inventory", inventoryRoutes);
-app.use("/api/cron", cronRoutes);
+app.use("/api/sheets", sheetsRoutes);
 
-// Root route — also reports whether MongoDB is actually connected, so a
-// single visit to this URL in a browser tells you if the backend AND the
-// database are both healthy (open http://localhost:3000 directly to check).
+// Root route — also reports whether the Google Sheets database is actually
+// configured, so a single visit to this URL tells you if the backend AND
+// its database are both healthy (open http://localhost:3000 directly to check).
 app.get("/", (req, res) => {
-  const dbStates = ["disconnected", "connected", "connecting", "disconnecting"];
   res.status(200).json({
     message: "Kushal Timbers Expense Tracker API is running...",
-    database: dbStates[mongoose.connection.readyState] || "unknown",
+    database: isSheetsDbConfigured() ? "google-sheets-connected" : "google-sheets-not-configured",
   });
 });
 
@@ -104,19 +83,23 @@ app.use((err, req, res, next) => {
   next();
 });
 
-// Runs recurring transactions + payment reminder emails once a day. This
-// only fires while the process is actually awake — on Render's free tier the
-// service sleeps after 15 minutes idle, so this alone isn't reliable. For a
-// guarantee, also ping POST /api/cron/run-daily (with an `x-cron-secret`
-// header matching CRON_SECRET) from a free external scheduler like
-// cron-job.org once a day — see backend/.env.example.
-cron.schedule("0 3 * * *", () => {
-  console.log("⏰ Running scheduled daily tasks (recurring transactions + payment reminders)...");
-  runDailyTasks()
-    .then((summary) => console.log("✅ Daily tasks complete:", summary))
-    .catch((error) => console.error("❌ Daily tasks failed:", error.message));
-});
-
 // Start server
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Server running on http://localhost:${PORT}`));
+app.listen(PORT, async () => {
+  console.log(`🚀 Server running on http://localhost:${PORT}`);
+
+  // The database is a Google Sheet now (no MongoDB) — make sure its Users
+  // and Expenses tabs exist before anything tries to read/write them.
+  if (isSheetsDbConfigured()) {
+    try {
+      await Promise.all([ensureUsersSheet(), ensureExpensesSheet()]);
+      console.log("✅ Google Sheets database ready (Users + Expenses tabs)");
+    } catch (error) {
+      console.error("❌ Couldn't prepare the Google Sheets database:", error.message);
+    }
+  } else {
+    console.error(
+      "❌ Google Sheets isn't configured yet — set GOOGLE_SERVICE_ACCOUNT_KEY and GOOGLE_SHEET_ID in backend/.env. Nothing can be saved until this is done. See backend/.env.example."
+    );
+  }
+});

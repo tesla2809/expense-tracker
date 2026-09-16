@@ -1,6 +1,6 @@
 import React from "react";
 import { Link } from "react-router-dom";
-import { Menu, PieChart, Settings as SettingsIcon } from "lucide-react";
+import { Menu, PieChart } from "lucide-react";
 
 // onMenuClick opens the mobile/tablet sidebar drawer (owned by DashboardLayout).
 // The hamburger only renders below the lg breakpoint — on desktop the sidebar
@@ -26,13 +26,6 @@ const Navbar = ({ onMenuClick }) => {
           </Link>
         </div>
 
-        <Link
-          to="/dashboard/settings"
-          className="p-2 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-all shrink-0"
-          aria-label="Settings"
-        >
-          <SettingsIcon size={20} />
-        </Link>
       </div>
     </nav>
   );

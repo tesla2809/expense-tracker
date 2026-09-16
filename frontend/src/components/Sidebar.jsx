@@ -4,28 +4,14 @@ import { useAuth } from '../context/AuthContext';
 import {
   LogOut,
   LayoutDashboard,
-  TrendingUp,
-  Receipt,
+  Sheet,
   PieChart,
-  UploadCloud,
-  Users,
-  Boxes,
-  Wallet,
-  FileBarChart,
-  Settings,
   X,
 } from 'lucide-react';
 
 const NAV_ITEMS = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, end: true },
-  { to: '/dashboard/income', label: 'Income', icon: TrendingUp },
-  { to: '/dashboard/expenses', label: 'Expenses', icon: Receipt },
-  { to: '/dashboard/import', label: 'Import', icon: UploadCloud },
-  { to: '/dashboard/parties', label: 'Parties', icon: Users },
-  { to: '/dashboard/inventory', label: 'Inventory', icon: Boxes },
-  { to: '/dashboard/wages', label: 'Wages', icon: Wallet },
-  { to: '/dashboard/reports', label: 'Reports', icon: FileBarChart },
-  { to: '/dashboard/settings', label: 'Settings', icon: Settings },
+  { to: '/dashboard/expenses', label: 'Expense Sheet', icon: Sheet },
 ];
 
 // isOpen/onClose control the mobile/tablet off-canvas drawer only — on
