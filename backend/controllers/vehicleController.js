@@ -1,25 +1,14 @@
-import fs from "fs";
-import path from "path";
 import {
   listVehiclesByUser,
   createVehicle,
   updateVehicleById,
   deleteVehicleById,
 } from "../models/vehicleStore.js";
-import { UPLOADS_DIR } from "../middleware/uploadMiddleware.js";
+import { storeFieldFile, deleteStoredFile } from "../utils/fileStorage.js";
 
-// multer's .fields() puts uploads in req.files as { fieldName: [file] } —
-// this pulls out the stored path for one optional field, or undefined if
-// nothing was uploaded under that name.
-const docFilePath = (req, field) => {
-  const file = req.files?.[field]?.[0];
-  return file ? `/uploads/${file.filename}` : undefined;
-};
-
-const deleteFileIfAny = (relativePath) => {
-  if (!relativePath) return;
-  fs.unlink(path.join(UPLOADS_DIR, path.basename(relativePath)), () => {});
-};
+// The three tracked vehicle documents, looped over wherever all of them get
+// the same treatment (upload, replace, clean up).
+const DOC_FIELDS = ["rcFile", "insuranceFile", "permitFile"];
 
 export const getVehicles = async (req, res) => {
   try {
@@ -44,9 +33,9 @@ export const addVehicle = async (req, res) => {
       rcExpiry,
       insuranceExpiry,
       permitExpiry,
-      rcFile: docFilePath(req, "rcFile"),
-      insuranceFile: docFilePath(req, "insuranceFile"),
-      permitFile: docFilePath(req, "permitFile"),
+      rcFile: await storeFieldFile(req, "rcFile"),
+      insuranceFile: await storeFieldFile(req, "insuranceFile"),
+      permitFile: await storeFieldFile(req, "permitFile"),
     });
     res.status(201).json(vehicle);
   } catch (error) {
@@ -69,11 +58,11 @@ export const updateVehicle = async (req, res) => {
     // that are about to be replaced.
     const existing = (await listVehiclesByUser(req.user.id)).find((v) => v._id === req.params.id);
 
-    for (const field of ["rcFile", "insuranceFile", "permitFile"]) {
-      const newPath = docFilePath(req, field);
-      if (newPath) {
-        if (existing?.[field]) deleteFileIfAny(existing[field]);
-        updates[field] = newPath;
+    for (const field of DOC_FIELDS) {
+      const stored = await storeFieldFile(req, field);
+      if (stored) {
+        if (existing?.[field]) await deleteStoredFile(existing[field]);
+        updates[field] = stored;
       }
     }
 
@@ -93,9 +82,7 @@ export const deleteVehicle = async (req, res) => {
     if (error === "not_found") return res.status(404).json({ message: "Vehicle not found" });
     if (error === "forbidden") return res.status(403).json({ message: "Not authorized to delete this vehicle" });
 
-    deleteFileIfAny(deleted?.rcFile);
-    deleteFileIfAny(deleted?.insuranceFile);
-    deleteFileIfAny(deleted?.permitFile);
+    for (const field of DOC_FIELDS) await deleteStoredFile(deleted?.[field]);
 
     res.json({ message: "Vehicle deleted successfully" });
   } catch (error) {

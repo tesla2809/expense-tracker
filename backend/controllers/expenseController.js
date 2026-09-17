@@ -1,5 +1,3 @@
-import fs from "fs";
-import path from "path";
 import {
   listExpensesByUser,
   createExpense,
@@ -7,9 +5,7 @@ import {
   deleteExpenseById,
   bulkCreateExpenses,
 } from "../models/expenseStore.js";
-import { UPLOADS_DIR } from "../middleware/uploadMiddleware.js";
-
-const billFilePath = (req) => (req.file ? `/uploads/${req.file.filename}` : undefined);
+import { storeFile, deleteStoredFile } from "../utils/fileStorage.js";
 
 // Add Expense (one row of the sheet)
 export const addExpense = async (req, res) => {
@@ -26,7 +22,7 @@ export const addExpense = async (req, res) => {
       expense,
       amount,
       master,
-      billFile: billFilePath(req),
+      billFile: await storeFile(req.file),
       vehicleId,
     });
     res.status(201).json(doc);
@@ -102,10 +98,8 @@ export const updateExpense = async (req, res) => {
     if (req.file) {
       // Best-effort cleanup of the previous bill file, if any.
       const existing = (await listExpensesByUser(req.user.id)).find((e) => e._id === req.params.id);
-      if (existing?.billFile) {
-        fs.unlink(path.join(UPLOADS_DIR, path.basename(existing.billFile)), () => {});
-      }
-      updates.billFile = billFilePath(req);
+      if (existing?.billFile) await deleteStoredFile(existing.billFile);
+      updates.billFile = await storeFile(req.file);
     }
 
     const { expense: updated, error } = await updateExpenseById(req.params.id, req.user.id, updates);
@@ -125,9 +119,7 @@ export const deleteExpense = async (req, res) => {
     if (error === "not_found") return res.status(404).json({ message: "Expense not found" });
     if (error === "forbidden") return res.status(403).json({ message: "Not authorized to delete this expense" });
 
-    if (deleted?.billFile) {
-      fs.unlink(path.join(UPLOADS_DIR, path.basename(deleted.billFile)), () => {});
-    }
+    if (deleted?.billFile) await deleteStoredFile(deleted.billFile);
 
     res.json({ message: "Expense deleted successfully" });
   } catch (error) {

@@ -13,14 +13,11 @@ if (!fs.existsSync(UPLOADS_DIR)) {
 const ALLOWED_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "application/pdf"]);
 const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024; // 5MB
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, UPLOADS_DIR),
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase();
-    const uniqueName = `${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`;
-    cb(null, uniqueName);
-  },
-});
+// Uploads are held in memory, never written to the server's disk, because
+// Render's free tier wipes that disk on every redeploy and spin-down. The
+// buffer is handed straight to utils/fileStorage.js, which pushes it to
+// permanent cloud storage (see the explanation at the top of that file).
+const storage = multer.memoryStorage();
 
 const fileFilter = (req, file, cb) => {
   if (!ALLOWED_MIME_TYPES.has(file.mimetype)) {

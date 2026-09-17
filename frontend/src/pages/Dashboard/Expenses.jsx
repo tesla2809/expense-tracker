@@ -26,7 +26,14 @@ import { ToastContainer, toast } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
 
 const SERVER_ORIGIN = API_BASE_URL.replace(/\/api\/?$/, "");
-const billUrl = (billFile) => (billFile ? `${SERVER_ORIGIN}${billFile}` : null);
+
+// Bills now live in cloud storage, so billFile is usually a full https URL.
+// Older rows still hold a "/uploads/..." path from when files were saved on
+// the server's own disk — those keep resolving against the API origin.
+const billUrl = (billFile) => {
+  if (!billFile) return null;
+  return billFile.startsWith("http") ? billFile : `${SERVER_ORIGIN}${billFile}`;
+};
 
 const todayStr = () => new Date().toISOString().split("T")[0];
 
