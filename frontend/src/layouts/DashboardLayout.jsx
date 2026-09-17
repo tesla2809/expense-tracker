@@ -10,11 +10,11 @@ const DashboardLayout = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   return (
-    <div className="min-h-screen bg-gray-100 w-full overflow-x-hidden">
+    <div className="min-h-screen bg-gray-100 dark:bg-gray-800 w-full overflow-x-hidden">
       <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
 
       <div className="flex flex-col min-h-screen lg:pl-64">
-        <header className="sticky top-0 z-20 w-full bg-white shadow-sm">
+        <header className="sticky top-0 z-20 w-full bg-white dark:bg-gray-800 shadow-sm">
           <Navbar onMenuClick={() => setSidebarOpen(true)} />
         </header>
 

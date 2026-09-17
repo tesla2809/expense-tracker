@@ -9,7 +9,7 @@ import { storeFile, deleteStoredFile } from "../utils/fileStorage.js";
 
 // Add Expense (one row of the sheet)
 export const addExpense = async (req, res) => {
-  const { date, expense, amount, master, vehicleId } = req.body;
+  const { date, expense, amount, master, vehicleId, litres } = req.body;
 
   if (!expense || !amount || !master) {
     return res.status(400).json({ message: "Expense, amount and master are required" });
@@ -24,6 +24,7 @@ export const addExpense = async (req, res) => {
       master,
       billFile: await storeFile(req.file),
       vehicleId,
+      litres,
     });
     res.status(201).json(doc);
   } catch (error) {
@@ -85,7 +86,7 @@ export const getMonthlyTrend = async (req, res) => {
 
 // Update Expense (editing a cell/row in the sheet)
 export const updateExpense = async (req, res) => {
-  const { date, expense, amount, master, vehicleId } = req.body;
+  const { date, expense, amount, master, vehicleId, removeBill, litres } = req.body;
 
   try {
     const updates = {};
@@ -94,12 +95,17 @@ export const updateExpense = async (req, res) => {
     if (amount !== undefined) updates.amount = Number(amount);
     if (master !== undefined) updates.master = master;
     if (vehicleId !== undefined) updates.vehicleId = vehicleId;
+    if (litres !== undefined) updates.litres = litres;
 
-    if (req.file) {
-      // Best-effort cleanup of the previous bill file, if any.
+    // Two different things can happen to a bill: a new file replaces it, or
+    // the user detaches it outright (the × in the Bill column). Both need the
+    // old file cleaned up, so look the row up once and handle either case.
+    // FormData sends booleans as strings, hence the "true" comparison.
+    const isRemovingBill = removeBill === "true" || removeBill === true;
+    if (req.file || isRemovingBill) {
       const existing = (await listExpensesByUser(req.user.id)).find((e) => e._id === req.params.id);
       if (existing?.billFile) await deleteStoredFile(existing.billFile);
-      updates.billFile = await storeFile(req.file);
+      updates.billFile = req.file ? await storeFile(req.file) : "";
     }
 
     const { expense: updated, error } = await updateExpenseById(req.params.id, req.user.id, updates);

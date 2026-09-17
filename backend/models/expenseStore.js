@@ -6,7 +6,7 @@ import crypto from "crypto";
 import { ensureSheetTab, getAllRows, appendRow, appendRows, updateRowAt, deleteRowAt } from "../utils/sheetsDb.js";
 
 const SHEET_NAME = "Expenses";
-const HEADERS = ["id", "userId", "date", "expense", "amount", "master", "billFile", "createdAt", "updatedAt", "vehicleId"];
+const HEADERS = ["id", "userId", "date", "expense", "amount", "master", "billFile", "createdAt", "updatedAt", "vehicleId", "litres"];
 
 export const ensureExpensesSheet = () => ensureSheetTab(SHEET_NAME, HEADERS);
 
@@ -26,6 +26,9 @@ const toExpense = (row) => ({
   createdAt: row.createdAt,
   updatedAt: row.updatedAt,
   vehicleId: row.vehicleId || null,
+  // Only set on fuel entries. Lets the Vehicles page work out rate per litre
+  // (amount / litres) and spot a bill charged above the going rate.
+  litres: row.litres === "" || row.litres === undefined ? null : Number(row.litres) || null,
 });
 
 const timeOf = (d) => {
@@ -41,7 +44,7 @@ export const listExpensesByUser = async (userId) => {
     .sort((a, b) => timeOf(b.date) - timeOf(a.date) || timeOf(b.createdAt) - timeOf(a.createdAt));
 };
 
-export const createExpense = async ({ userId, date, expense, amount, master, billFile, vehicleId }) => {
+export const createExpense = async ({ userId, date, expense, amount, master, billFile, vehicleId, litres }) => {
   const now = new Date().toISOString();
   const row = {
     id: crypto.randomUUID(),
@@ -54,6 +57,7 @@ export const createExpense = async ({ userId, date, expense, amount, master, bil
     createdAt: now,
     updatedAt: now,
     vehicleId: vehicleId || "",
+    litres: litres === undefined || litres === null || litres === "" ? "" : Number(litres),
   };
   await appendRow(SHEET_NAME, HEADERS, row);
   return toExpense(row);
@@ -92,6 +96,7 @@ export const updateExpenseById = async (id, userId, updates) => {
   const merged = { ...row, ...updates, updatedAt: new Date().toISOString() };
   if (updates.date !== undefined) merged.date = new Date(updates.date).toISOString();
   if (updates.amount !== undefined) merged.amount = Number(updates.amount);
+  if (updates.litres !== undefined) merged.litres = updates.litres === "" || updates.litres === null ? "" : Number(updates.litres);
   await updateRowAt(SHEET_NAME, HEADERS, row._row, merged);
   return { expense: toExpense(merged) };
 };

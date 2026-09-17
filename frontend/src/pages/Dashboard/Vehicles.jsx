@@ -5,6 +5,7 @@ import { fetchMasters } from "/src/api/meta";
 import { API_BASE_URL } from "/src/api/config";
 import { DEFAULT_EXPENSE_MASTERS } from "/src/constants/categories";
 import MasterAutocomplete from "/src/components/MasterAutocomplete";
+import AlertsStrip, { buildVehicleAlerts } from "/src/components/AlertsStrip";
 import {
   FiPlus,
   FiTrash2,
@@ -14,6 +15,8 @@ import {
   FiChevronRight,
   FiFilter,
   FiXCircle,
+  FiX,
+  FiAlertTriangle,
 } from "react-icons/fi";
 import { ToastContainer, toast } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
@@ -54,10 +57,10 @@ const getDocStatus = (expiryDateStr) => {
 };
 
 const DATE_STATUS_CLASSES = {
-  valid: "border-green-300 bg-green-50/40 focus:ring-green-400",
-  expiring: "border-amber-300 bg-amber-50/40 focus:ring-amber-400",
-  expired: "border-red-300 bg-red-50/40 focus:ring-red-400",
-  none: "border-transparent hover:border-gray-200 focus:border-gray-300 focus:ring-red-400",
+  valid: "border-green-300 dark:border-green-700 bg-green-50/40 dark:bg-green-900/25 focus:ring-green-400",
+  expiring: "border-amber-300 dark:border-amber-700 bg-amber-50/40 dark:bg-amber-900/25 focus:ring-amber-400",
+  expired: "border-red-300 dark:border-red-700 bg-red-50/40 dark:bg-red-900/25 focus:ring-red-400",
+  none: "border-transparent hover:border-gray-200 dark:hover:border-gray-700 focus:border-gray-300 dark:focus:border-gray-600 focus:ring-red-400",
 };
 
 // The 3 tracked vehicle documents — looped over to generate matching columns
@@ -86,8 +89,22 @@ const emptyVehicleDraft = () => ({
 // Column order for the consolidated Vehicle Expense Sheet below — same
 // "type across, it saves" pattern as the main Expense Sheet, with a Vehicle
 // column added so any vehicle's expense can be logged from one place.
-const EXPENSE_FIELD_ORDER = ["date", "vehicleId", "expense", "amount", "master"];
-const emptyExpenseDraft = () => ({ date: todayStr(), vehicleId: "", expense: "", amount: "", master: "", billFileObj: null });
+const EXPENSE_FIELD_ORDER = ["date", "vehicleId", "expense", "amount", "master", "litres"];
+const emptyExpenseDraft = () => ({ date: todayStr(), vehicleId: "", expense: "", amount: "", master: "", litres: "", billFileObj: null });
+
+// Litres only makes sense on a fuel entry, so the Litres cell is live on those
+// rows and a quiet dash everywhere else. Matching on the words rather than the
+// exact master name means a typed "Diesel for truck 2" still counts.
+const isFuelMaster = (master) => /fuel|diesel|petrol/i.test(master || "");
+
+// Rate per litre is the cheating check this data supports: a bill charged well
+// above the going pump rate stands out. (Mileage — litres against distance —
+// would need an odometer reading per fill, which we deliberately don't ask for.)
+const ratePerLitre = (row) => {
+  const litres = Number(row.litres) || 0;
+  const amount = Number(row.amount) || 0;
+  return litres > 0 ? amount / litres : null;
+};
 
 // Masters that make up the category-wise breakdown table further down —
 // each gets its own dedicated column. Anything logged under a master outside
@@ -143,22 +160,18 @@ const Vehicles = () => {
   const [expenseGroupBy, setExpenseGroupBy] = useState("none"); // "none" | "date" | "master" | "vehicle"
   const [collapsedExpenseGroups, setCollapsedExpenseGroups] = useState(() => new Set());
 
-  // --- Filter toolbar: Vehicle + Master + date range + amount range ---
+  // --- Filter toolbar: Vehicle + Master + date range ---
   const [showExpenseFilters, setShowExpenseFilters] = useState(false);
   const [filterVehicleId, setFilterVehicleId] = useState("");
   const [filterExpenseMaster, setFilterExpenseMaster] = useState("");
   const [filterExpenseDateFrom, setFilterExpenseDateFrom] = useState("");
   const [filterExpenseDateTo, setFilterExpenseDateTo] = useState("");
-  const [filterExpenseAmountMin, setFilterExpenseAmountMin] = useState("");
-  const [filterExpenseAmountMax, setFilterExpenseAmountMax] = useState("");
 
   const activeExpenseFilterCount = [
     filterVehicleId,
     filterExpenseMaster,
     filterExpenseDateFrom,
     filterExpenseDateTo,
-    filterExpenseAmountMin,
-    filterExpenseAmountMax,
   ].filter((v) => v !== "").length;
 
   const clearExpenseFilters = () => {
@@ -166,8 +179,26 @@ const Vehicles = () => {
     setFilterExpenseMaster("");
     setFilterExpenseDateFrom("");
     setFilterExpenseDateTo("");
-    setFilterExpenseAmountMin("");
-    setFilterExpenseAmountMax("");
+  };
+
+  // Enter walks across the filter controls, same as it walks across a sheet
+  // row — the whole page stays keyboard-only. The last field closes the panel.
+  const EXPENSE_FILTER_ORDER = ["search", "vehicle", "master", "from", "to"];
+  const expenseFilterRefs = useRef({});
+  const setExpenseFilterRef = (key) => (el) => {
+    expenseFilterRefs.current[key] = el;
+  };
+  const handleExpenseFilterKeyDown = (e, key) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    const next = EXPENSE_FILTER_ORDER[EXPENSE_FILTER_ORDER.indexOf(key) + 1];
+    if (next) {
+      if (!showExpenseFilters) setShowExpenseFilters(true);
+      setTimeout(() => expenseFilterRefs.current[next]?.focus(), 0);
+    } else {
+      e.target.blur();
+      setShowExpenseFilters(false);
+    }
   };
   const expenseCellRefs = useRef({});
   const setExpenseCellRef = (rowKey, field) => (el) => {
@@ -254,6 +285,36 @@ const Vehicles = () => {
 
   const vehiclesById = useMemo(() => new Map(vehicles.map((v) => [v._id, v])), [vehicles]);
 
+  // Fuel summary per vehicle — litres bought, spend, and the average rate
+  // actually paid. A vehicle's own average is the yardstick each of its fills
+  // is measured against, since pump prices differ by area and over time.
+  const fuelSummary = useMemo(() => {
+    return vehicles
+      .map((vehicle) => {
+        const fills = (expensesByVehicle.get(vehicle._id) || []).filter(
+          (e) => isFuelMaster(e.master) && Number(e.litres) > 0
+        );
+        if (!fills.length) return null;
+        const litres = fills.reduce((s2, e) => s2 + Number(e.litres), 0);
+        const spend = fills.reduce((s2, e) => s2 + (Number(e.amount) || 0), 0);
+        const avgRate = litres > 0 ? spend / litres : 0;
+        // Flag the dearest fill when it is more than 15% above this vehicle's
+        // own average — high enough to ignore normal pump-price drift.
+        let dearest = null;
+        for (const f of fills) {
+          const rate = ratePerLitre(f);
+          if (rate && (!dearest || rate > dearest.rate)) dearest = { row: f, rate };
+        }
+        const flagged = dearest && avgRate > 0 && dearest.rate > avgRate * 1.15 ? dearest : null;
+        return { vehicle, fills: fills.length, litres, spend, avgRate, flagged };
+      })
+      .filter(Boolean);
+  }, [vehicles, expensesByVehicle]);
+
+  // Expiring/expired RC, insurance and permit dates — the reminder sir asked
+  // for, sitting on the page that owns those documents.
+  const vehicleAlerts = useMemo(() => buildVehicleAlerts(vehicles), [vehicles]);
+
   // All vehicle-tagged expenses, across every vehicle — this is what the
   // consolidated Vehicle Expense Sheet below shows and edits.
   const vehicleExpenseRows = useMemo(() => expenses.filter((e) => e.vehicleId), [expenses]);
@@ -271,8 +332,6 @@ const Vehicles = () => {
 
   const filteredVehicleExpenseRows = useMemo(() => {
     const q = expenseSearch.trim().toLowerCase();
-    const min = filterExpenseAmountMin !== "" ? Number(filterExpenseAmountMin) : null;
-    const max = filterExpenseAmountMax !== "" ? Number(filterExpenseAmountMax) : null;
     return vehicleExpenseRows.filter((r) => {
       if (q) {
         const matches =
@@ -285,9 +344,6 @@ const Vehicles = () => {
       if (filterExpenseMaster && r.master !== filterExpenseMaster) return false;
       if (filterExpenseDateFrom && (!r.date || new Date(r.date) < new Date(filterExpenseDateFrom))) return false;
       if (filterExpenseDateTo && (!r.date || new Date(r.date) > new Date(filterExpenseDateTo))) return false;
-      const amount = Number(r.amount) || 0;
-      if (min !== null && amount < min) return false;
-      if (max !== null && amount > max) return false;
       return true;
     });
   }, [
@@ -298,8 +354,6 @@ const Vehicles = () => {
     filterExpenseMaster,
     filterExpenseDateFrom,
     filterExpenseDateTo,
-    filterExpenseAmountMin,
-    filterExpenseAmountMax,
   ]);
 
   const groupedExpenseRows = useMemo(() => {
@@ -413,6 +467,21 @@ const Vehicles = () => {
     }
   };
 
+  // Detaching one document without touching the rest of the vehicle.
+  // Replacing is "remove, then attach again" — the cell reverts to its
+  // upload state. The backend flag is removeRcFile / removeInsuranceFile /
+  // removePermitFile.
+  const handleRemoveDoc = async (vehicleId, fileField, label) => {
+    const flag = `remove${fileField.charAt(0).toUpperCase()}${fileField.slice(1)}`;
+    try {
+      const updated = await updateVehicle(vehicleId, { [flag]: true });
+      setVehicles((prev) => prev.map((v) => (v._id === vehicleId ? updated : v)));
+      notifySuccess(`${label} removed`);
+    } catch (err) {
+      notifyError(err.message || `Failed to remove ${label}`);
+    }
+  };
+
   const handleDeleteVehicle = async (vehicle) => {
     if (!window.confirm(`Delete "${vehicle.name}"? Its logged expenses will stay in the Expense Sheet, just no longer linked to a vehicle name.`)) {
       return;
@@ -440,6 +509,7 @@ const Vehicles = () => {
         master: expenseDraft.master.trim(),
         bill: expenseDraft.billFileObj || undefined,
         vehicleId: expenseDraft.vehicleId,
+        litres: isFuelMaster(expenseDraft.master) ? expenseDraft.litres : "",
       });
       setExpenses((prev) => [saved, ...prev]);
       // Keep the vehicle selected — logging several expenses for the same
@@ -467,7 +537,14 @@ const Vehicles = () => {
       return;
     }
     try {
-      await updateExpense(id, { date: row.date, expense: row.expense, amount: Number(row.amount), master: row.master, vehicleId: row.vehicleId });
+      await updateExpense(id, {
+        date: row.date,
+        expense: row.expense,
+        amount: Number(row.amount),
+        master: row.master,
+        vehicleId: row.vehicleId,
+        litres: isFuelMaster(row.master) ? row.litres ?? "" : "",
+      });
     } catch (err) {
       notifyError(err.message || "Failed to save that change");
       loadData();
@@ -498,7 +575,7 @@ const Vehicles = () => {
   // One row of the Vehicle Expense Sheet — same look/behavior as the main
   // Expense Sheet's row, plus an editable Vehicle picker.
   const renderExpenseRow = (row) => (
-    <tr key={row._id} className="hover:bg-gray-50">
+    <tr key={row._id} className="hover:bg-gray-50 dark:hover:bg-gray-900">
       <td className="px-2 py-2">
         <input
           ref={setExpenseCellRef(row._id, "date")}
@@ -507,7 +584,7 @@ const Vehicles = () => {
           onChange={(e) => updateExpenseField(row._id, "date", e.target.value)}
           onBlur={() => saveExpenseRow(row._id)}
           onKeyDown={(e) => handleExpenseCellKeyDown(e, row._id, "date", { isDraft: false })}
-          className="w-full border border-transparent hover:border-gray-200 focus:border-gray-300 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
+          className="w-full border border-transparent hover:border-gray-200 dark:hover:border-gray-700 focus:border-gray-300 dark:focus:border-gray-600 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
         />
       </td>
       <td className="px-2 py-2">
@@ -519,7 +596,7 @@ const Vehicles = () => {
             setTimeout(() => saveExpenseRow(row._id), 0);
           }}
           onKeyDown={(e) => handleExpenseCellKeyDown(e, row._id, "vehicleId", { isDraft: false })}
-          className="w-full border border-transparent hover:border-gray-200 focus:border-gray-300 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 bg-transparent"
+          className="w-full border border-transparent hover:border-gray-200 dark:hover:border-gray-700 focus:border-gray-300 dark:focus:border-gray-600 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 bg-transparent"
         >
           <option value="" disabled>
             Select vehicle
@@ -539,7 +616,7 @@ const Vehicles = () => {
           onChange={(e) => updateExpenseField(row._id, "expense", e.target.value)}
           onBlur={() => saveExpenseRow(row._id)}
           onKeyDown={(e) => handleExpenseCellKeyDown(e, row._id, "expense", { isDraft: false })}
-          className="w-full border border-transparent hover:border-gray-200 focus:border-gray-300 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
+          className="w-full border border-transparent hover:border-gray-200 dark:hover:border-gray-700 focus:border-gray-300 dark:focus:border-gray-600 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
         />
       </td>
       <td className="px-2 py-2">
@@ -552,7 +629,7 @@ const Vehicles = () => {
           onKeyDown={(e) => handleExpenseCellKeyDown(e, row._id, "amount", { isDraft: false })}
           min="0"
           step="0.01"
-          className="w-full border border-transparent hover:border-gray-200 focus:border-gray-300 rounded-md px-2 py-1.5 text-sm text-right focus:outline-none focus:ring-2 focus:ring-red-400"
+          className="w-full border border-transparent hover:border-gray-200 dark:hover:border-gray-700 focus:border-gray-300 dark:focus:border-gray-600 rounded-md px-2 py-1.5 text-sm text-right focus:outline-none focus:ring-2 focus:ring-red-400"
         />
       </td>
       <td className="px-2 py-2">
@@ -563,8 +640,33 @@ const Vehicles = () => {
           onChange={(value) => updateExpenseField(row._id, "master", value)}
           onBlur={() => saveExpenseRow(row._id)}
           onKeyDown={(e) => handleExpenseCellKeyDown(e, row._id, "master", { isDraft: false })}
-          className="w-full border border-transparent hover:border-gray-200 focus:border-gray-300 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
+          className="w-full border border-transparent hover:border-gray-200 dark:hover:border-gray-700 focus:border-gray-300 dark:focus:border-gray-600 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
         />
+      </td>
+      <td className="px-2 py-2">
+        {isFuelMaster(row.master) ? (
+          <>
+            <input
+              ref={setExpenseCellRef(row._id, "litres")}
+              type="number"
+              value={row.litres ?? ""}
+              onChange={(e) => updateExpenseField(row._id, "litres", e.target.value)}
+              onBlur={() => saveExpenseRow(row._id)}
+              onKeyDown={(e) => handleExpenseCellKeyDown(e, row._id, "litres", { isDraft: false })}
+              min="0"
+              step="0.01"
+              placeholder="0"
+              className="w-full border border-transparent hover:border-gray-200 dark:hover:border-gray-700 focus:border-gray-300 dark:focus:border-gray-600 rounded-md px-2 py-1.5 text-sm text-right focus:outline-none focus:ring-2 focus:ring-red-400"
+            />
+            {ratePerLitre(row) && (
+              <span className="block text-right text-[10px] text-gray-400 dark:text-gray-500 pr-2">
+                ₹{ratePerLitre(row).toFixed(1)}/L
+              </span>
+            )}
+          </>
+        ) : (
+          <span className="block text-center text-gray-300 dark:text-gray-600 text-sm">—</span>
+        )}
       </td>
       <td className="px-2 py-2 text-center">
         {row.billFile ? (
@@ -572,13 +674,13 @@ const Vehicles = () => {
             href={fileUrl(row.billFile)}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center justify-center text-blue-600 hover:text-blue-800"
+            className="inline-flex items-center justify-center text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300"
             title="View bill"
           >
             <FiPaperclip size={16} />
           </a>
         ) : (
-          <label className="inline-flex items-center justify-center cursor-pointer text-gray-300 hover:text-blue-600" title="Attach a bill">
+          <label className="inline-flex items-center justify-center cursor-pointer text-gray-300 dark:text-gray-600 hover:text-blue-600 dark:hover:text-blue-400" title="Attach a bill">
             <FiPaperclip size={16} />
             <input
               type="file"
@@ -590,7 +692,7 @@ const Vehicles = () => {
         )}
       </td>
       <td className="px-2 py-2 text-center">
-        <button onClick={() => handleDeleteExpenseRow(row._id)} className="text-gray-300 hover:text-red-600" title="Delete row">
+        <button onClick={() => handleDeleteExpenseRow(row._id)} className="text-gray-300 dark:text-gray-600 hover:text-red-600" title="Delete row">
           <FiTrash2 size={16} />
         </button>
       </td>
@@ -598,33 +700,35 @@ const Vehicles = () => {
   );
 
   return (
-    <div className="p-4 sm:p-6 lg:px-12 bg-gradient-to-br from-gray-50 to-gray-100 min-h-screen">
+    <div className="p-4 sm:p-6 lg:px-12 bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-950 min-h-screen">
       <ToastContainer />
       <div className="max-w-6xl mx-auto">
         <div className="mb-6">
-          <h1 className="text-2xl sm:text-3xl font-bold text-gray-800 mb-1">Vehicles</h1>
-          <p className="text-gray-600 text-sm sm:text-base">Type straight into the sheet — vehicles and documents save as you go</p>
+          <h1 className="text-2xl sm:text-3xl font-bold text-gray-800 dark:text-gray-100 mb-1">Vehicles</h1>
+          <p className="text-gray-600 dark:text-gray-300 text-sm sm:text-base">Type straight into the sheet — vehicles and documents save as you go</p>
         </div>
 
+        <AlertsStrip alerts={vehicleAlerts} />
+
         {/* Vehicle sheet — add/edit vehicles, same draft-row pattern as the Expense Sheet */}
-        <div className="bg-white shadow-lg rounded-xl border border-gray-200 overflow-hidden mb-8">
+        <div className="bg-white dark:bg-gray-800 shadow-lg rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden mb-8">
           <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200 text-sm">
-              <thead className="bg-gray-50">
+            <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700 text-sm">
+              <thead className="bg-gray-50 dark:bg-gray-900">
                 <tr>
-                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase w-40">Name</th>
-                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase w-36">Number Plate</th>
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase w-40">Name</th>
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase w-36">Number Plate</th>
                   {DOC_FIELDS.map((f) => (
-                    <th key={f.key} className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase w-44">
+                    <th key={f.key} className="px-3 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase w-44">
                       {f.label}
                     </th>
                   ))}
-                  <th className="px-3 py-3 text-center text-xs font-medium text-gray-500 uppercase w-16"></th>
+                  <th className="px-3 py-3 text-center text-xs font-medium text-gray-500 dark:text-gray-400 uppercase w-16"></th>
                 </tr>
               </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
+              <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                 {/* Draft row — always present at the top, fills in like a spreadsheet */}
-                <tr className="bg-blue-50/40">
+                <tr className="bg-blue-50/40 dark:bg-blue-900/20">
                   <td className="px-2 py-2">
                     <input
                       ref={setVehicleCellRef("draft", "name")}
@@ -633,7 +737,7 @@ const Vehicles = () => {
                       onChange={(e) => setVehicleDraftField("name", e.target.value)}
                       onKeyDown={(e) => handleVehicleCellKeyDown(e, "draft", "name", { isDraft: true })}
                       placeholder="E.g., Truck 1"
-                      className="w-full border border-gray-200 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
+                      className="w-full border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
                     />
                   </td>
                   <td className="px-2 py-2">
@@ -644,7 +748,7 @@ const Vehicles = () => {
                       onChange={(e) => setVehicleDraftField("numberPlate", e.target.value)}
                       onKeyDown={(e) => handleVehicleCellKeyDown(e, "draft", "numberPlate", { isDraft: true })}
                       placeholder="E.g., GJ01AB1234"
-                      className="w-full border border-gray-200 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
+                      className="w-full border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
                     />
                   </td>
                   {DOC_FIELDS.map((f) => (
@@ -657,10 +761,10 @@ const Vehicles = () => {
                           onChange={(e) => setVehicleDraftField(f.expiryField, e.target.value)}
                           onBlur={f.key === LAST_DOC_FIELD.key ? commitVehicleDraftIfReady : undefined}
                           onKeyDown={(e) => handleVehicleCellKeyDown(e, "draft", f.expiryField, { isDraft: true })}
-                          className="min-w-0 flex-1 border border-gray-200 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
+                          className="min-w-0 flex-1 border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
                         />
-                        <label className="shrink-0 cursor-pointer text-gray-400 hover:text-blue-600" title={`Attach ${f.label}`}>
-                          <FiPaperclip size={14} className={vehicleDraft[`${f.key}FileObj`] ? "text-blue-600" : ""} />
+                        <label className="shrink-0 cursor-pointer text-gray-400 dark:text-gray-500 hover:text-blue-600 dark:hover:text-blue-400" title={`Attach ${f.label}`}>
+                          <FiPaperclip size={14} className={vehicleDraft[`${f.key}FileObj`] ? "text-blue-600 dark:text-blue-400" : ""} />
                           <input
                             type="file"
                             accept="image/jpeg,image/png,image/webp,application/pdf"
@@ -671,7 +775,7 @@ const Vehicles = () => {
                       </div>
                     </td>
                   ))}
-                  <td className="px-2 py-2 text-center text-gray-300">
+                  <td className="px-2 py-2 text-center text-gray-300 dark:text-gray-600">
                     {savingVehicleDraft ? (
                       <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-b-2 border-red-500 mx-auto"></div>
                     ) : (
@@ -682,14 +786,14 @@ const Vehicles = () => {
 
                 {!loading && vehicles.length === 0 && (
                   <tr>
-                    <td colSpan={2 + DOC_FIELDS.length + 1} className="px-4 py-10 text-center text-gray-400">
+                    <td colSpan={2 + DOC_FIELDS.length + 1} className="px-4 py-10 text-center text-gray-400 dark:text-gray-500">
                       No vehicles yet — start typing in the row above.
                     </td>
                   </tr>
                 )}
 
                 {vehicles.map((vehicle) => (
-                  <tr key={vehicle._id} className="hover:bg-gray-50">
+                  <tr key={vehicle._id} className="hover:bg-gray-50 dark:hover:bg-gray-900">
                     <td className="px-2 py-2">
                       <input
                         ref={setVehicleCellRef(vehicle._id, "name")}
@@ -698,7 +802,7 @@ const Vehicles = () => {
                         onChange={(e) => updateVehicleField(vehicle._id, "name", e.target.value)}
                         onBlur={() => saveVehicleRow(vehicle._id)}
                         onKeyDown={(e) => handleVehicleCellKeyDown(e, vehicle._id, "name", { isDraft: false })}
-                        className="w-full border border-transparent hover:border-gray-200 focus:border-gray-300 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
+                        className="w-full border border-transparent hover:border-gray-200 dark:hover:border-gray-700 focus:border-gray-300 dark:focus:border-gray-600 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
                       />
                     </td>
                     <td className="px-2 py-2">
@@ -709,7 +813,7 @@ const Vehicles = () => {
                         onChange={(e) => updateVehicleField(vehicle._id, "numberPlate", e.target.value)}
                         onBlur={() => saveVehicleRow(vehicle._id)}
                         onKeyDown={(e) => handleVehicleCellKeyDown(e, vehicle._id, "numberPlate", { isDraft: false })}
-                        className="w-full border border-transparent hover:border-gray-200 focus:border-gray-300 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
+                        className="w-full border border-transparent hover:border-gray-200 dark:hover:border-gray-700 focus:border-gray-300 dark:focus:border-gray-600 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
                       />
                     </td>
                     {DOC_FIELDS.map((f) => {
@@ -729,17 +833,26 @@ const Vehicles = () => {
                               title={status === "expired" ? "Expired" : status === "expiring" ? "Expiring within 30 days" : ""}
                             />
                             {fileHref ? (
-                              <a
-                                href={fileHref}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="shrink-0 text-blue-600 hover:text-blue-800"
-                                title={`View ${f.label}`}
-                              >
-                                <FiPaperclip size={14} />
-                              </a>
+                              <span className="shrink-0 inline-flex items-center gap-0.5">
+                                <a
+                                  href={fileHref}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300"
+                                  title={`View ${f.label}`}
+                                >
+                                  <FiPaperclip size={14} />
+                                </a>
+                                <button
+                                  onClick={() => handleRemoveDoc(vehicle._id, f.fileField, f.label)}
+                                  className="text-gray-300 dark:text-gray-600 hover:text-red-600"
+                                  title={`Remove ${f.label}`}
+                                >
+                                  <FiX size={12} />
+                                </button>
+                              </span>
                             ) : (
-                              <label className="shrink-0 cursor-pointer text-gray-300 hover:text-blue-600" title={`Attach ${f.label}`}>
+                              <label className="shrink-0 cursor-pointer text-gray-300 dark:text-gray-600 hover:text-blue-600 dark:hover:text-blue-400" title={`Attach ${f.label}`}>
                                 <FiPaperclip size={14} />
                                 <input
                                   type="file"
@@ -754,7 +867,7 @@ const Vehicles = () => {
                       );
                     })}
                     <td className="px-2 py-2 text-center">
-                      <button onClick={() => handleDeleteVehicle(vehicle)} className="text-gray-300 hover:text-red-600" title="Delete vehicle">
+                      <button onClick={() => handleDeleteVehicle(vehicle)} className="text-gray-300 dark:text-gray-600 hover:text-red-600" title="Delete vehicle">
                         <FiTrash2 size={16} />
                       </button>
                     </td>
@@ -767,51 +880,51 @@ const Vehicles = () => {
 
         {/* Category-wise breakdown — one row per vehicle, one dedicated column per master */}
         {!loading && vehicles.length > 0 && (
-          <div className="bg-white shadow-lg rounded-xl border border-gray-200 overflow-hidden mb-8">
-            <div className="px-4 py-3 border-b border-gray-100">
-              <h2 className="font-semibold text-gray-700">Expense Breakdown by Category</h2>
-              <p className="text-xs text-gray-500 mt-0.5">All-time totals per vehicle — anything logged under a different master falls into "Other"</p>
+          <div className="bg-white dark:bg-gray-800 shadow-lg rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden mb-8">
+            <div className="px-4 py-3 border-b border-gray-100 dark:border-gray-700">
+              <h2 className="font-semibold text-gray-700 dark:text-gray-200">Expense Breakdown by Category</h2>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">All-time totals per vehicle — anything logged under a different master falls into "Other"</p>
             </div>
             <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-gray-200 text-sm">
-                <thead className="bg-gray-50">
+              <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700 text-sm">
+                <thead className="bg-gray-50 dark:bg-gray-900">
                   <tr>
-                    <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 uppercase sticky left-0 bg-gray-50 w-40">Vehicle</th>
+                    <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase sticky left-0 bg-gray-50 dark:bg-gray-900 w-40">Vehicle</th>
                     {VEHICLE_BREAKDOWN_MASTERS.map((m) => (
-                      <th key={m} className="px-3 py-2.5 text-right text-xs font-medium text-gray-500 uppercase whitespace-nowrap">
+                      <th key={m} className="px-3 py-2.5 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase whitespace-nowrap">
                         {m}
                       </th>
                     ))}
-                    <th className="px-3 py-2.5 text-right text-xs font-medium text-gray-500 uppercase whitespace-nowrap">Other</th>
-                    <th className="px-3 py-2.5 text-right text-xs font-medium text-gray-700 uppercase whitespace-nowrap">Total</th>
+                    <th className="px-3 py-2.5 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase whitespace-nowrap">Other</th>
+                    <th className="px-3 py-2.5 text-right text-xs font-medium text-gray-700 dark:text-gray-200 uppercase whitespace-nowrap">Total</th>
                   </tr>
                 </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
+                <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                   {breakdownRows.map(({ vehicle, byMaster, other, total }) => (
-                    <tr key={vehicle._id} className="hover:bg-gray-50">
-                      <td className="px-3 py-2 font-medium text-gray-700 whitespace-nowrap sticky left-0 bg-white">{vehicle.name}</td>
+                    <tr key={vehicle._id} className="hover:bg-gray-50 dark:hover:bg-gray-900">
+                      <td className="px-3 py-2 font-medium text-gray-700 dark:text-gray-200 whitespace-nowrap sticky left-0 bg-white dark:bg-gray-800">{vehicle.name}</td>
                       {VEHICLE_BREAKDOWN_MASTERS.map((m) => (
-                        <td key={m} className="px-3 py-2 text-right text-gray-600 whitespace-nowrap">
-                          {byMaster[m] > 0 ? formatCurrency(byMaster[m]) : <span className="text-gray-300">—</span>}
+                        <td key={m} className="px-3 py-2 text-right text-gray-600 dark:text-gray-300 whitespace-nowrap">
+                          {byMaster[m] > 0 ? formatCurrency(byMaster[m]) : <span className="text-gray-300 dark:text-gray-600">—</span>}
                         </td>
                       ))}
-                      <td className="px-3 py-2 text-right text-gray-600 whitespace-nowrap">
-                        {other > 0 ? formatCurrency(other) : <span className="text-gray-300">—</span>}
+                      <td className="px-3 py-2 text-right text-gray-600 dark:text-gray-300 whitespace-nowrap">
+                        {other > 0 ? formatCurrency(other) : <span className="text-gray-300 dark:text-gray-600">—</span>}
                       </td>
                       <td className="px-3 py-2 text-right font-bold text-red-600 whitespace-nowrap">{formatCurrency(total)}</td>
                     </tr>
                   ))}
                 </tbody>
-                <tfoot className="bg-gray-50">
+                <tfoot className="bg-gray-50 dark:bg-gray-900">
                   <tr>
-                    <td className="px-3 py-2.5 font-semibold text-gray-700 whitespace-nowrap sticky left-0 bg-gray-50">Grand Total</td>
+                    <td className="px-3 py-2.5 font-semibold text-gray-700 dark:text-gray-200 whitespace-nowrap sticky left-0 bg-gray-50 dark:bg-gray-900">Grand Total</td>
                     {VEHICLE_BREAKDOWN_MASTERS.map((m) => (
-                      <td key={m} className="px-3 py-2.5 text-right font-medium text-gray-700 whitespace-nowrap">
-                        {breakdownGrandTotals.byMaster[m] > 0 ? formatCurrency(breakdownGrandTotals.byMaster[m]) : <span className="text-gray-300">—</span>}
+                      <td key={m} className="px-3 py-2.5 text-right font-medium text-gray-700 dark:text-gray-200 whitespace-nowrap">
+                        {breakdownGrandTotals.byMaster[m] > 0 ? formatCurrency(breakdownGrandTotals.byMaster[m]) : <span className="text-gray-300 dark:text-gray-600">—</span>}
                       </td>
                     ))}
-                    <td className="px-3 py-2.5 text-right font-medium text-gray-700 whitespace-nowrap">
-                      {breakdownGrandTotals.other > 0 ? formatCurrency(breakdownGrandTotals.other) : <span className="text-gray-300">—</span>}
+                    <td className="px-3 py-2.5 text-right font-medium text-gray-700 dark:text-gray-200 whitespace-nowrap">
+                      {breakdownGrandTotals.other > 0 ? formatCurrency(breakdownGrandTotals.other) : <span className="text-gray-300 dark:text-gray-600">—</span>}
                     </td>
                     <td className="px-3 py-2.5 text-right font-bold text-red-600 whitespace-nowrap">{formatCurrency(breakdownGrandTotals.total)}</td>
                   </tr>
@@ -821,36 +934,89 @@ const Vehicles = () => {
           </div>
         )}
 
+        {/* Fuel summary — what each vehicle actually pays per litre */}
+        {fuelSummary.length > 0 && (
+          <div className="bg-white dark:bg-gray-800 shadow-lg rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden mb-8">
+            <div className="px-4 py-3 border-b border-gray-100 dark:border-gray-700">
+              <h2 className="font-semibold text-gray-700 dark:text-gray-200">Fuel Rate Check</h2>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                Average price actually paid per litre, per vehicle. A fill more than 15% above a
+                vehicle's own average gets flagged — that usually means an inflated bill.
+              </p>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700 text-sm">
+                <thead className="bg-gray-50 dark:bg-gray-900">
+                  <tr>
+                    <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase w-40">Vehicle</th>
+                    <th className="px-3 py-2.5 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Fills</th>
+                    <th className="px-3 py-2.5 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Litres</th>
+                    <th className="px-3 py-2.5 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Fuel Spend</th>
+                    <th className="px-3 py-2.5 text-right text-xs font-medium text-gray-700 dark:text-gray-200 uppercase">Avg Rate</th>
+                    <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Dearest Fill</th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
+                  {fuelSummary.map(({ vehicle, fills, litres, spend, avgRate, flagged }) => (
+                    <tr key={vehicle._id} className="hover:bg-gray-50 dark:hover:bg-gray-900">
+                      <td className="px-3 py-2 font-medium text-gray-700 dark:text-gray-200 whitespace-nowrap">{vehicle.name}</td>
+                      <td className="px-3 py-2 text-right text-gray-600 dark:text-gray-300">{fills}</td>
+                      <td className="px-3 py-2 text-right text-gray-600 dark:text-gray-300 tabular-nums">{litres.toFixed(1)} L</td>
+                      <td className="px-3 py-2 text-right text-gray-600 dark:text-gray-300 tabular-nums">{formatCurrency(spend)}</td>
+                      <td className="px-3 py-2 text-right font-bold text-gray-800 dark:text-gray-100 tabular-nums">
+                        ₹{avgRate.toFixed(2)}/L
+                      </td>
+                      <td className="px-3 py-2 text-xs">
+                        {flagged ? (
+                          <span className="inline-flex items-center gap-1.5 text-red-600 font-medium">
+                            <FiAlertTriangle size={13} className="shrink-0" />
+                            ₹{flagged.rate.toFixed(2)}/L on{" "}
+                            {flagged.row.date ? new Date(flagged.row.date).toLocaleDateString("en-IN") : "—"}
+                          </span>
+                        ) : (
+                          <span className="text-gray-400 dark:text-gray-500">Nothing unusual</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
         {/* Consolidated Vehicle Expense Sheet — every vehicle's expenses, one sheet, same feel as the main Expense Sheet */}
         <div className="mb-4">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-4">
             <div>
-              <h2 className="text-xl font-bold text-gray-800">Vehicle Expense Sheet</h2>
-              <p className="text-gray-500 text-sm">Type straight into the sheet — pick a vehicle, it saves as you go</p>
+              <h2 className="text-xl font-bold text-gray-800 dark:text-gray-100">Vehicle Expense Sheet</h2>
+              <p className="text-gray-500 dark:text-gray-400 text-sm">Type straight into the sheet — pick a vehicle, it saves as you go</p>
             </div>
-            <div className="bg-white p-3 rounded-lg shadow-md">
-              <span className="block text-xs text-gray-500">Total</span>
+            <div className="bg-white dark:bg-gray-800 p-3 rounded-lg shadow-md">
+              <span className="block text-xs text-gray-500 dark:text-gray-400">Total</span>
               <span className="text-xl font-bold text-red-600">{formatCurrency(vehicleExpenseTotal)}</span>
             </div>
           </div>
 
           <div className="flex flex-col sm:flex-row gap-3 mb-4">
             <div className="relative flex-1">
-              <FiSearch size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <FiSearch size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 dark:text-gray-500" />
               <input
+                ref={setExpenseFilterRef("search")}
                 type="text"
                 value={expenseSearch}
                 onChange={(e) => setExpenseSearch(e.target.value)}
+                onKeyDown={(e) => handleExpenseFilterKeyDown(e, "search")}
                 placeholder="Search by expense, master or vehicle..."
-                className="w-full bg-white border border-gray-300 rounded-lg pl-9 pr-3 py-2.5 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-red-400"
+                className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg pl-9 pr-3 py-2.5 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-red-400"
               />
             </div>
             <button
               onClick={() => setShowExpenseFilters((v) => !v)}
               className={`flex items-center gap-2 border rounded-lg shadow-sm px-3 py-2.5 text-sm font-medium ${
                 showExpenseFilters || activeExpenseFilterCount > 0
-                  ? "bg-red-50 border-red-300 text-red-700"
-                  : "bg-white border-gray-300 text-gray-700 hover:bg-gray-50"
+                  ? "bg-red-50 dark:bg-red-900/30 border-red-300 dark:border-red-700 text-red-700 dark:text-red-300"
+                  : "bg-white dark:bg-gray-800 border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-900"
               }`}
             >
               <FiFilter size={15} />
@@ -861,12 +1027,12 @@ const Vehicles = () => {
                 </span>
               )}
             </button>
-            <div className="flex items-center gap-2 bg-white border border-gray-300 rounded-lg shadow-sm px-3 py-2.5">
-              <span className="text-xs font-medium text-gray-500 whitespace-nowrap">Group by</span>
+            <div className="flex items-center gap-2 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg shadow-sm px-3 py-2.5">
+              <span className="text-xs font-medium text-gray-500 dark:text-gray-400 whitespace-nowrap">Group by</span>
               <select
                 value={expenseGroupBy}
                 onChange={(e) => setExpenseGroupBy(e.target.value)}
-                className="text-sm text-gray-700 focus:outline-none bg-transparent"
+                className="text-sm text-gray-700 dark:text-gray-200 focus:outline-none bg-transparent"
               >
                 <option value="none">None</option>
                 <option value="date">Date</option>
@@ -877,14 +1043,16 @@ const Vehicles = () => {
           </div>
 
           {showExpenseFilters && (
-            <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-4 mb-4">
+            <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-sm p-4 mb-4">
               <div className="flex flex-wrap items-end gap-4">
                 <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1">Vehicle</label>
+                  <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Vehicle</label>
                   <select
+                    ref={setExpenseFilterRef("vehicle")}
                     value={filterVehicleId}
                     onChange={(e) => setFilterVehicleId(e.target.value)}
-                    className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 min-w-[9rem]"
+                    onKeyDown={(e) => handleExpenseFilterKeyDown(e, "vehicle")}
+                    className="border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 min-w-[9rem]"
                   >
                     <option value="">All vehicles</option>
                     {vehicles.map((v) => (
@@ -895,11 +1063,13 @@ const Vehicles = () => {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1">Master</label>
+                  <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Master</label>
                   <select
+                    ref={setExpenseFilterRef("master")}
                     value={filterExpenseMaster}
                     onChange={(e) => setFilterExpenseMaster(e.target.value)}
-                    className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 min-w-[10rem]"
+                    onKeyDown={(e) => handleExpenseFilterKeyDown(e, "master")}
+                    className="border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 min-w-[10rem]"
                   >
                     <option value="">All masters</option>
                     {presentExpenseMasters.map((m) => (
@@ -910,49 +1080,31 @@ const Vehicles = () => {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1">From date</label>
+                  <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">From date</label>
                   <input
+                    ref={setExpenseFilterRef("from")}
                     type="date"
                     value={filterExpenseDateFrom}
                     onChange={(e) => setFilterExpenseDateFrom(e.target.value)}
-                    className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
+                    onKeyDown={(e) => handleExpenseFilterKeyDown(e, "from")}
+                    className="border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1">To date</label>
+                  <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">To date</label>
                   <input
+                    ref={setExpenseFilterRef("to")}
                     type="date"
                     value={filterExpenseDateTo}
                     onChange={(e) => setFilterExpenseDateTo(e.target.value)}
-                    className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1">Min amount</label>
-                  <input
-                    type="number"
-                    min="0"
-                    value={filterExpenseAmountMin}
-                    onChange={(e) => setFilterExpenseAmountMin(e.target.value)}
-                    placeholder="0"
-                    className="w-28 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1">Max amount</label>
-                  <input
-                    type="number"
-                    min="0"
-                    value={filterExpenseAmountMax}
-                    onChange={(e) => setFilterExpenseAmountMax(e.target.value)}
-                    placeholder="Any"
-                    className="w-28 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
+                    onKeyDown={(e) => handleExpenseFilterKeyDown(e, "to")}
+                    className="border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
                   />
                 </div>
                 {activeExpenseFilterCount > 0 && (
                   <button
                     onClick={clearExpenseFilters}
-                    className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-red-600 font-medium pb-2"
+                    className="flex items-center gap-1.5 text-sm text-gray-500 dark:text-gray-400 hover:text-red-600 font-medium pb-2"
                   >
                     <FiXCircle size={15} />
                     Clear filters
@@ -962,28 +1114,29 @@ const Vehicles = () => {
             </div>
           )}
 
-          <div className="bg-white shadow-lg rounded-xl border border-gray-200 overflow-hidden">
+          <div className="bg-white dark:bg-gray-800 shadow-lg rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
             {loading ? (
               <div className="flex justify-center items-center h-40">
                 <div className="animate-spin rounded-full h-10 w-10 border-t-2 border-b-2 border-red-500"></div>
               </div>
             ) : (
               <div className="overflow-x-auto">
-                <table className="min-w-full divide-y divide-gray-200 text-sm">
-                  <thead className="bg-gray-50">
+                <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700 text-sm">
+                  <thead className="bg-gray-50 dark:bg-gray-900">
                     <tr>
-                      <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase w-36">Date</th>
-                      <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase w-40">Vehicle</th>
-                      <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase">Expense</th>
-                      <th className="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase w-28">Amount</th>
-                      <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase w-44">Master</th>
-                      <th className="px-3 py-3 text-center text-xs font-medium text-gray-500 uppercase w-16">Bill</th>
-                      <th className="px-3 py-3 text-center text-xs font-medium text-gray-500 uppercase w-12"></th>
+                      <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase w-36">Date</th>
+                      <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase w-40">Vehicle</th>
+                      <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Expense</th>
+                      <th className="px-3 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase w-28">Amount</th>
+                      <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase w-44">Master</th>
+                      <th className="px-3 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase w-24">Litres</th>
+                      <th className="px-3 py-3 text-center text-xs font-medium text-gray-500 dark:text-gray-400 uppercase w-16">Bill</th>
+                      <th className="px-3 py-3 text-center text-xs font-medium text-gray-500 dark:text-gray-400 uppercase w-12"></th>
                     </tr>
                   </thead>
-                  <tbody className="bg-white divide-y divide-gray-200">
+                  <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                     {/* Draft row — always present, regardless of search/grouping */}
-                    <tr className="bg-blue-50/40">
+                    <tr className="bg-blue-50/40 dark:bg-blue-900/20">
                       <td className="px-2 py-2">
                         <input
                           ref={setExpenseCellRef("draft", "date")}
@@ -991,7 +1144,7 @@ const Vehicles = () => {
                           value={expenseDraft.date}
                           onChange={(e) => setExpenseDraftField("date", e.target.value)}
                           onKeyDown={(e) => handleExpenseCellKeyDown(e, "draft", "date", { isDraft: true })}
-                          className="w-full border border-gray-200 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
+                          className="w-full border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
                         />
                       </td>
                       <td className="px-2 py-2">
@@ -1000,7 +1153,7 @@ const Vehicles = () => {
                           value={expenseDraft.vehicleId}
                           onChange={(e) => setExpenseDraftField("vehicleId", e.target.value)}
                           onKeyDown={(e) => handleExpenseCellKeyDown(e, "draft", "vehicleId", { isDraft: true })}
-                          className="w-full border border-gray-200 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 bg-white"
+                          className="w-full border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 bg-white dark:bg-gray-800"
                         >
                           <option value="" disabled>
                             Select vehicle
@@ -1021,7 +1174,7 @@ const Vehicles = () => {
                           onBlur={commitExpenseDraftIfReady}
                           onKeyDown={(e) => handleExpenseCellKeyDown(e, "draft", "expense", { isDraft: true })}
                           placeholder="E.g., Diesel refill"
-                          className="w-full border border-gray-200 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
+                          className="w-full border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
                         />
                       </td>
                       <td className="px-2 py-2">
@@ -1035,7 +1188,7 @@ const Vehicles = () => {
                           placeholder="0"
                           min="0"
                           step="0.01"
-                          className="w-full border border-gray-200 rounded-md px-2 py-1.5 text-sm text-right focus:outline-none focus:ring-2 focus:ring-red-400"
+                          className="w-full border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 text-sm text-right focus:outline-none focus:ring-2 focus:ring-red-400"
                         />
                       </td>
                       <td className="px-2 py-2">
@@ -1047,12 +1200,30 @@ const Vehicles = () => {
                           onBlur={commitExpenseDraftIfReady}
                           onKeyDown={(e) => handleExpenseCellKeyDown(e, "draft", "master", { isDraft: true })}
                           placeholder="E.g., Fuel & Diesel"
-                          className="w-full border border-gray-200 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
+                          className="w-full border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
                         />
                       </td>
+                      <td className="px-2 py-2">
+                        {isFuelMaster(expenseDraft.master) ? (
+                          <input
+                            ref={setExpenseCellRef("draft", "litres")}
+                            type="number"
+                            value={expenseDraft.litres}
+                            onChange={(e) => setExpenseDraftField("litres", e.target.value)}
+                            onBlur={commitExpenseDraftIfReady}
+                            onKeyDown={(e) => handleExpenseCellKeyDown(e, "draft", "litres", { isDraft: true })}
+                            placeholder="0"
+                            min="0"
+                            step="0.01"
+                            className="w-full border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 text-sm text-right focus:outline-none focus:ring-2 focus:ring-red-400"
+                          />
+                        ) : (
+                          <span className="block text-center text-gray-300 dark:text-gray-600 text-sm">—</span>
+                        )}
+                      </td>
                       <td className="px-2 py-2 text-center">
-                        <label className="inline-flex items-center justify-center cursor-pointer text-gray-400 hover:text-blue-600" title="Attach a bill">
-                          <FiPaperclip size={16} className={expenseDraft.billFileObj ? "text-blue-600" : ""} />
+                        <label className="inline-flex items-center justify-center cursor-pointer text-gray-400 dark:text-gray-500 hover:text-blue-600 dark:hover:text-blue-400" title="Attach a bill">
+                          <FiPaperclip size={16} className={expenseDraft.billFileObj ? "text-blue-600 dark:text-blue-400" : ""} />
                           <input
                             type="file"
                             accept="image/jpeg,image/png,image/webp,application/pdf"
@@ -1061,7 +1232,7 @@ const Vehicles = () => {
                           />
                         </label>
                       </td>
-                      <td className="px-2 py-2 text-center text-gray-300">
+                      <td className="px-2 py-2 text-center text-gray-300 dark:text-gray-600">
                         {savingExpenseDraft ? (
                           <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-b-2 border-red-500 mx-auto"></div>
                         ) : (
@@ -1072,7 +1243,7 @@ const Vehicles = () => {
 
                     {filteredVehicleExpenseRows.length === 0 && (
                       <tr>
-                        <td colSpan={7} className="px-4 py-10 text-center text-gray-400">
+                        <td colSpan={8} className="px-4 py-10 text-center text-gray-400 dark:text-gray-500">
                           {vehicleExpenseRows.length === 0
                             ? vehicles.length === 0
                               ? "Add a vehicle above first, then log its expenses here."
@@ -1089,13 +1260,13 @@ const Vehicles = () => {
                           const isCollapsed = collapsedExpenseGroups.has(group.key);
                           return (
                             <React.Fragment key={group.key}>
-                              <tr className="bg-gray-100 cursor-pointer select-none" onClick={() => toggleExpenseGroup(group.key)}>
-                                <td colSpan={7} className="px-3 py-2">
+                              <tr className="bg-gray-100 dark:bg-gray-800 cursor-pointer select-none" onClick={() => toggleExpenseGroup(group.key)}>
+                                <td colSpan={8} className="px-3 py-2">
                                   <div className="flex items-center justify-between">
-                                    <span className="flex items-center font-semibold text-gray-700 text-sm">
+                                    <span className="flex items-center font-semibold text-gray-700 dark:text-gray-200 text-sm">
                                       {isCollapsed ? <FiChevronRight size={14} className="mr-1.5" /> : <FiChevronDown size={14} className="mr-1.5" />}
                                       {group.key}
-                                      <span className="ml-2 font-normal text-gray-400 text-xs">
+                                      <span className="ml-2 font-normal text-gray-400 dark:text-gray-500 text-xs">
                                         ({group.items.length} {group.items.length === 1 ? "entry" : "entries"})
                                       </span>
                                     </span>

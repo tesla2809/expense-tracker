@@ -10,6 +10,11 @@ import { storeFieldFile, deleteStoredFile } from "../utils/fileStorage.js";
 // the same treatment (upload, replace, clean up).
 const DOC_FIELDS = ["rcFile", "insuranceFile", "permitFile"];
 
+// The body flag the frontend sends to detach a document outright:
+// rcFile -> removeRcFile. Distinct from simply not uploading a new file,
+// which leaves whatever is already attached alone.
+const removeFlagFor = (field) => `remove${field.charAt(0).toUpperCase()}${field.slice(1)}`;
+
 export const getVehicles = async (req, res) => {
   try {
     const vehicles = await listVehiclesByUser(req.user.id);
@@ -59,10 +64,12 @@ export const updateVehicle = async (req, res) => {
     const existing = (await listVehiclesByUser(req.user.id)).find((v) => v._id === req.params.id);
 
     for (const field of DOC_FIELDS) {
-      const stored = await storeFieldFile(req, field);
-      if (stored) {
+      const removing = req.body[removeFlagFor(field)] === "true";
+      const stored = removing ? undefined : await storeFieldFile(req, field);
+
+      if (removing || stored) {
         if (existing?.[field]) await deleteStoredFile(existing[field]);
-        updates[field] = stored;
+        updates[field] = stored || "";
       }
     }
 

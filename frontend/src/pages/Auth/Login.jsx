@@ -39,18 +39,18 @@ const Login = () => {
   };
 
   return (
-    <div className="flex justify-center items-center min-h-screen bg-gray-100 py-8 px-4">
+    <div className="flex justify-center items-center min-h-screen bg-gray-100 dark:bg-gray-800 py-8 px-4">
       <form
         onSubmit={handleSubmit}
-        className="bg-white p-6 rounded-lg shadow-lg w-full max-w-sm"
+        className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-lg w-full max-w-sm"
       >
         <div className="text-center mb-4">
-          <p className="text-blue-600 font-bold text-lg">Kushal Timbers</p>
-          <h2 className="text-xl font-semibold text-gray-700">Expense Tracker Login</h2>
+          <p className="text-blue-600 dark:text-blue-400 font-bold text-lg">Kushal Timbers</p>
+          <h2 className="text-xl font-semibold text-gray-700 dark:text-gray-200">Expense Tracker Login</h2>
         </div>
 
         <div className="mb-4">
-          <label htmlFor="email" className="block text-sm font-medium text-gray-700">
+          <label htmlFor="email" className="block text-sm font-medium text-gray-700 dark:text-gray-200">
             Email
           </label>
           <input
@@ -58,13 +58,13 @@ const Login = () => {
             id="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+            className="mt-1 block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
             required
           />
         </div>
 
         <div className="mb-4">
-          <label htmlFor="password" className="block text-sm font-medium text-gray-700">
+          <label htmlFor="password" className="block text-sm font-medium text-gray-700 dark:text-gray-200">
             Password
           </label>
           <input
@@ -72,7 +72,7 @@ const Login = () => {
             id="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+            className="mt-1 block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
             required
           />
         </div>
@@ -89,10 +89,10 @@ const Login = () => {
 
         <div className="mt-4 text-center">
           <p>
-            Don't have an account? <Link to="/signup" className="text-blue-600">Sign Up</Link>
+            Don't have an account? <Link to="/signup" className="text-blue-600 dark:text-blue-400">Sign Up</Link>
           </p>
           <p>
-            Forgot your password? <Link to="/forgot-password" className="text-blue-600">Recover it</Link>
+            Forgot your password? <Link to="/forgot-password" className="text-blue-600 dark:text-blue-400">Recover it</Link>
           </p>
         </div>
       </form>

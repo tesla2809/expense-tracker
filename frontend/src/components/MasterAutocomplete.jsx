@@ -67,7 +67,7 @@ const MasterAutocomplete = ({ value, onChange, onBlur, onKeyDown, masters, input
         className={className}
       />
       {open && matches.length > 0 && (
-        <div className="absolute z-20 left-0 right-0 mt-1 max-h-48 overflow-y-auto bg-white border border-gray-200 rounded-md shadow-lg text-sm">
+        <div className="absolute z-20 left-0 right-0 mt-1 max-h-48 overflow-y-auto bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md shadow-lg text-sm">
           {matches.map((m, i) => (
             <div
               key={m}
@@ -76,7 +76,7 @@ const MasterAutocomplete = ({ value, onChange, onBlur, onKeyDown, masters, input
                 clearTimeout(blurTimeout.current);
                 selectMaster(m);
               }}
-              className={`px-3 py-1.5 cursor-pointer ${i === highlight ? "bg-red-50 text-red-700" : "hover:bg-gray-50 text-gray-700"}`}
+              className={`px-3 py-1.5 cursor-pointer ${i === highlight ? "bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-300" : "hover:bg-gray-50 dark:hover:bg-gray-900 text-gray-700 dark:text-gray-200"}`}
             >
               {m}
             </div>

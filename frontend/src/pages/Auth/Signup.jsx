@@ -38,24 +38,24 @@ const Signup = () => {
   };
 
   return (
-    <div className="flex justify-center items-center min-h-screen bg-gray-100 py-8 px-4">
+    <div className="flex justify-center items-center min-h-screen bg-gray-100 dark:bg-gray-800 py-8 px-4">
       <form
         onSubmit={handleSubmit}
-        className="bg-white p-6 rounded-lg shadow-lg w-full max-w-sm"
+        className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-lg w-full max-w-sm"
       >
         <div className="text-center mb-4">
-          <p className="text-blue-600 font-bold text-lg">Kushal Timbers</p>
-          <h2 className="text-xl font-semibold text-gray-700">Create Your Account</h2>
+          <p className="text-blue-600 dark:text-blue-400 font-bold text-lg">Kushal Timbers</p>
+          <h2 className="text-xl font-semibold text-gray-700 dark:text-gray-200">Create Your Account</h2>
         </div>
 
         {signupError && (
-          <div className="mb-4 p-3 bg-red-100 text-red-700 rounded border border-red-200">
+          <div className="mb-4 p-3 bg-red-100 text-red-700 dark:text-red-300 rounded border border-red-200">
             {signupError}
           </div>
         )}
 
         <div className="mb-4">
-          <label htmlFor="name" className="block text-sm font-medium text-gray-700">
+          <label htmlFor="name" className="block text-sm font-medium text-gray-700 dark:text-gray-200">
             Name
           </label>
           <input
@@ -63,13 +63,13 @@ const Signup = () => {
             id="name"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+            className="mt-1 block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
             required
           />
         </div>
 
         <div className="mb-4">
-          <label htmlFor="email" className="block text-sm font-medium text-gray-700">
+          <label htmlFor="email" className="block text-sm font-medium text-gray-700 dark:text-gray-200">
             Email
           </label>
           <input
@@ -77,13 +77,13 @@ const Signup = () => {
             id="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+            className="mt-1 block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
             required
           />
         </div>
 
         <div className="mb-4">
-          <label htmlFor="password" className="block text-sm font-medium text-gray-700">
+          <label htmlFor="password" className="block text-sm font-medium text-gray-700 dark:text-gray-200">
             Password
           </label>
           <input
@@ -91,7 +91,7 @@ const Signup = () => {
             id="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+            className="mt-1 block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
             required
           />
         </div>
@@ -106,7 +106,7 @@ const Signup = () => {
 
         <div className="mt-4 text-center">
           <p>
-            Already have an account? <Link to="/login" className="text-blue-600">Login</Link>
+            Already have an account? <Link to="/login" className="text-blue-600 dark:text-blue-400">Login</Link>
           </p>
         </div>
       </form>
