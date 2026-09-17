@@ -3,6 +3,7 @@ import {
   createExpense,
   updateExpenseById,
   deleteExpenseById,
+  deleteExpensesByIds,
   bulkCreateExpenses,
 } from "../models/expenseStore.js";
 import { storeFile, deleteStoredFile } from "../utils/fileStorage.js";
@@ -133,6 +134,48 @@ export const deleteExpense = async (req, res) => {
   } catch (error) {
     console.error("Error deleting expense:", error);
     res.status(500).json({ message: error.message || "Error deleting expense" });
+  }
+};
+
+
+// Bulk delete — one request for a whole selection, rather than one request per
+// row. See deleteRowsAt in utils/sheetsDb.js for why this is not just a
+// convenience: row-at-a-time deletion exhausts the Google Sheets write quota.
+export const bulkDeleteExpenses = async (req, res) => {
+  const { ids } = req.body;
+
+  if (!Array.isArray(ids) || ids.length === 0) {
+    return res.status(400).json({ message: "Expected a non-empty `ids` array." });
+  }
+  if (ids.length > 500) {
+    return res.status(400).json({ message: "Too many rows in one request (limit 500). Delete them in batches." });
+  }
+  if (!ids.every((id) => typeof id === "string" && id.trim())) {
+    return res.status(400).json({ message: "Every id must be a non-empty string." });
+  }
+
+  try {
+    const { deleted, notFound, forbidden } = await deleteExpensesByIds(ids, req.user.id);
+
+    // Bills are cleaned up afterwards, and never allowed to fail the delete:
+    // the rows are already gone from the sheet by this point, so throwing here
+    // would report failure for work that actually succeeded. A file left
+    // behind in Cloudinary is a much smaller problem than a misleading error.
+    const bills = deleted.filter((d) => d.billFile).map((d) => deleteStoredFile(d.billFile));
+    const fileResults = await Promise.allSettled(bills);
+    const filesFailed = fileResults.filter((r) => r.status === "rejected").length;
+    if (filesFailed) {
+      console.warn(`Deleted ${deleted.length} expenses but ${filesFailed} bill file(s) could not be removed.`);
+    }
+
+    res.json({
+      message: `${deleted.length} ${deleted.length === 1 ? "entry" : "entries"} deleted`,
+      deletedIds: deleted.map((d) => d._id),
+      skipped: { notFound, forbidden },
+    });
+  } catch (error) {
+    console.error("Error bulk deleting expenses:", error);
+    res.status(500).json({ message: error.message || "Error deleting those entries" });
   }
 };
 

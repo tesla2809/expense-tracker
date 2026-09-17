@@ -6,7 +6,12 @@ const BASE_URL = "/vehicles";
 // (rcFileObj/insuranceFileObj/permitFileObj), each optional.
 const toFormData = (vehicleData) => {
   const formData = new FormData();
-  const fileFields = { rcFileObj: "rcFile", insuranceFileObj: "insuranceFile", permitFileObj: "permitFile" };
+  const fileFields = {
+    rcFileObj: "rcFile",
+    insuranceFileObj: "insuranceFile",
+    permitFileObj: "permitFile",
+    plateFileObj: "plateFile",
+  };
 
   Object.entries(vehicleData).forEach(([key, value]) => {
     if (fileFields[key]) {

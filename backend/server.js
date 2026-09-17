@@ -10,11 +10,15 @@ import metaRoutes from "./routes/metaRoutes.js";
 import importRoutes from "./routes/importRoutes.js";
 import sheetsRoutes from "./routes/sheetsRoutes.js";
 import vehicleRoutes from "./routes/vehicleRoutes.js";
+import budgetRoutes from "./routes/budgetRoutes.js";
+import masterRoutes from "./routes/masterRoutes.js";
 import { UPLOADS_DIR } from "./middleware/uploadMiddleware.js";
 import { isSheetsDbConfigured } from "./utils/sheetsDb.js";
 import { ensureUsersSheet } from "./models/userStore.js";
 import { ensureExpensesSheet } from "./models/expenseStore.js";
 import { ensureVehiclesSheet } from "./models/vehicleStore.js";
+import { ensureBudgetsSheet } from "./models/budgetStore.js";
+import { ensureMastersSheet } from "./models/masterStore.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -66,6 +70,8 @@ app.use("/api/meta", metaRoutes);
 app.use("/api/imports", importRoutes);
 app.use("/api/sheets", sheetsRoutes);
 app.use("/api/vehicles", vehicleRoutes);
+app.use("/api/budgets", budgetRoutes);
+app.use("/api/masters", masterRoutes);
 
 // Root route — also reports whether the Google Sheets database is actually
 // configured, so a single visit to this URL tells you if the backend AND
@@ -95,8 +101,14 @@ app.listen(PORT, async () => {
   // and Expenses tabs exist before anything tries to read/write them.
   if (isSheetsDbConfigured()) {
     try {
-      await Promise.all([ensureUsersSheet(), ensureExpensesSheet(), ensureVehiclesSheet()]);
-      console.log("✅ Google Sheets database ready (Users + Expenses + Vehicles tabs)");
+      await Promise.all([
+        ensureUsersSheet(),
+        ensureExpensesSheet(),
+        ensureVehiclesSheet(),
+        ensureBudgetsSheet(),
+        ensureMastersSheet(),
+      ]);
+      console.log("✅ Google Sheets database ready (Users + Expenses + Vehicles + Budgets + Masters tabs)");
     } catch (error) {
       console.error("❌ Couldn't prepare the Google Sheets database:", error.message);
     }

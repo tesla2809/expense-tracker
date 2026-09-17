@@ -846,15 +846,31 @@ const Vehicles = () => {
                     />
                   </td>
                   <td className="px-2 py-2">
-                    <input
-                      ref={setVehicleCellRef("draft", "numberPlate")}
-                      type="text"
-                      value={vehicleDraft.numberPlate}
-                      onChange={(e) => setVehicleDraftField("numberPlate", e.target.value)}
-                      onKeyDown={(e) => handleVehicleCellKeyDown(e, "draft", "numberPlate", { isDraft: true })}
-                      placeholder="E.g., GJ01AB1234"
-                      className="w-full border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
-                    />
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        ref={setVehicleCellRef("draft", "numberPlate")}
+                        type="text"
+                        value={vehicleDraft.numberPlate}
+                        onChange={(e) => setVehicleDraftField("numberPlate", e.target.value)}
+                        onKeyDown={(e) => handleVehicleCellKeyDown(e, "draft", "numberPlate", { isDraft: true })}
+                        placeholder="E.g., GJ01AB1234"
+                        className="min-w-0 flex-1 border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
+                      />
+                      {/* Inside the existing cell rather than a new column:
+                          the photo is of the plate, so it belongs beside it. */}
+                      <label
+                        className="shrink-0 cursor-pointer text-gray-400 dark:text-gray-500 hover:text-blue-600 dark:hover:text-blue-400"
+                        title="Attach a photo of the number plate"
+                      >
+                        <FiPaperclip size={14} className={vehicleDraft.plateFileObj ? "text-blue-600 dark:text-blue-400" : ""} />
+                        <input
+                          type="file"
+                          accept="image/jpeg,image/png,image/webp,application/pdf"
+                          className="hidden"
+                          onChange={(e) => handleDraftFileChange("plateFileObj", e.target.files?.[0] || null)}
+                        />
+                      </label>
+                    </div>
                   </td>
                   {DOC_FIELDS.map((f) => (
                     <td key={f.key} className="px-2 py-2">
@@ -911,15 +927,50 @@ const Vehicles = () => {
                       />
                     </td>
                     <td className="px-2 py-2">
-                      <input
-                        ref={setVehicleCellRef(vehicle._id, "numberPlate")}
-                        type="text"
-                        value={vehicle.numberPlate || ""}
-                        onChange={(e) => updateVehicleField(vehicle._id, "numberPlate", e.target.value)}
-                        onBlur={() => saveVehicleRow(vehicle._id)}
-                        onKeyDown={(e) => handleVehicleCellKeyDown(e, vehicle._id, "numberPlate", { isDraft: false })}
-                        className="w-full border border-transparent hover:border-gray-200 dark:hover:border-gray-700 focus:border-gray-300 dark:focus:border-gray-600 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
-                      />
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          ref={setVehicleCellRef(vehicle._id, "numberPlate")}
+                          type="text"
+                          value={vehicle.numberPlate || ""}
+                          onChange={(e) => updateVehicleField(vehicle._id, "numberPlate", e.target.value)}
+                          onBlur={() => saveVehicleRow(vehicle._id)}
+                          onKeyDown={(e) => handleVehicleCellKeyDown(e, vehicle._id, "numberPlate", { isDraft: false })}
+                          className="min-w-0 flex-1 border border-transparent hover:border-gray-200 dark:hover:border-gray-700 focus:border-gray-300 dark:focus:border-gray-600 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
+                        />
+                        {fileUrl(vehicle.plateFile) ? (
+                          <span className="shrink-0 inline-flex items-center gap-0.5">
+                            <a
+                              href={fileUrl(vehicle.plateFile)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300"
+                              title="View the number plate photo"
+                            >
+                              <FiPaperclip size={14} />
+                            </a>
+                            <button
+                              onClick={() => handleRemoveDoc(vehicle._id, "plateFile", "Number plate photo")}
+                              className="text-gray-300 dark:text-gray-500 hover:text-red-600"
+                              title="Remove the number plate photo"
+                            >
+                              <FiX size={12} />
+                            </button>
+                          </span>
+                        ) : (
+                          <label
+                            className="shrink-0 cursor-pointer text-gray-300 dark:text-gray-500 hover:text-blue-600 dark:hover:text-blue-400"
+                            title="Attach a photo of the number plate"
+                          >
+                            <FiPaperclip size={14} />
+                            <input
+                              type="file"
+                              accept="image/jpeg,image/png,image/webp,application/pdf"
+                              className="hidden"
+                              onChange={(e) => handleRowFileChange(vehicle._id, "plateFileObj", e.target.files?.[0], "Number plate photo")}
+                            />
+                          </label>
+                        )}
+                      </div>
                     </td>
                     {DOC_FIELDS.map((f) => {
                       const status = getDocStatus(vehicle[f.expiryField]);

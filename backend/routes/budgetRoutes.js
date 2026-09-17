@@ -1,13 +1,13 @@
 import express from "express";
-import { listBudgets, setBudget, deleteBudget } from "../controllers/budgetController.js";
+import { getBudgets, saveBudgets } from "../controllers/budgetController.js";
 import protect from "../middleware/authMiddleware.js";
 
 const router = express.Router();
 
 router.use(protect);
 
-router.get("/", listBudgets);
-router.post("/", setBudget);
-router.delete("/:id", deleteBudget);
+router.get("/", getBudgets);
+// One PUT saves every changed budget at once — see the controller for why.
+router.put("/", saveBudgets);
 
 export default router;

@@ -184,6 +184,86 @@ export const updateRowAt = async (sheetName, headers, rowNumber, rowObject) => {
   );
 };
 
+// Updates MANY existing rows in ONE API call.
+//
+// Why this exists: Google Sheets allows 60 writes per minute, shared across
+// every user of this app (one service account). Saving 21 master budgets by
+// calling updateRowAt 21 times burns a third of that minute's budget and takes
+// seconds. values.batchUpdate sends all of them as a single request, so the
+// cost is one write no matter how many rows change.
+//
+// `updates` is [{ rowNumber, rowObject }], with rowNumber being the 1-indexed
+// sheet row from getAllRows' `_row`.
+export const updateRowsAt = async (sheetName, headers, updates) => {
+  if (!updates.length) return;
+  const client = requireClient();
+  const spreadsheetId = getSpreadsheetId();
+  const lastCol = colLetter(headers.length - 1);
+  const data = updates.map(({ rowNumber, rowObject }) => ({
+    range: `${sheetName}!A${rowNumber}:${lastCol}${rowNumber}`,
+    values: [headers.map((h) => rowObject[h] ?? "")],
+  }));
+  await friendly(
+    () =>
+      client.spreadsheets.values.batchUpdate({
+        spreadsheetId,
+        requestBody: { valueInputOption: "RAW", data },
+      }),
+    `updating ${updates.length} rows in "${sheetName}"`
+  );
+};
+
+
+// Deletes MANY rows in ONE API call.
+//
+// The reason this exists: deleting rows one at a time meant TWO Google Sheets
+// calls per row — a full sheet read to locate it, then a write to remove it.
+// Fifty deletions was a hundred round trips against a 60-writes-per-minute
+// quota shared by the whole app, which is why deleting a batch used to crawl
+// and then fail outright partway through.
+//
+// Two details that matter:
+//
+// 1. DESCENDING ORDER. Google applies the requests in a batch one after
+//    another, and deleting row 5 shifts row 6 up into its place. Working from
+//    the bottom of the sheet upwards means every index is still correct when
+//    its turn comes. Ascending order would delete the wrong rows — silently,
+//    with no error.
+//
+// 2. CONTIGUOUS RUNS ARE MERGED. Rows 8, 9 and 10 become a single range
+//    rather than three requests, so deleting a long selection stays small.
+export const deleteRowsAt = async (sheetName, rowNumbers) => {
+  if (!rowNumbers.length) return;
+  const client = requireClient();
+  const spreadsheetId = getSpreadsheetId();
+  const sheetId = await getSheetGid(sheetName);
+
+  const descending = [...new Set(rowNumbers)].sort((a, b) => b - a);
+  const ranges = [];
+  for (const rowNumber of descending) {
+    const last = ranges[ranges.length - 1];
+    // `startIndex === rowNumber` means this row sits directly above the range
+    // we're already building, so extend it downward instead of starting a new
+    // one. (startIndex is 0-based and exclusive-of-header; endIndex is
+    // exclusive, hence the off-by-one that makes this comparison work.)
+    if (last && last.startIndex === rowNumber) last.startIndex = rowNumber - 1;
+    else ranges.push({ startIndex: rowNumber - 1, endIndex: rowNumber });
+  }
+
+  await friendly(
+    () =>
+      client.spreadsheets.batchUpdate({
+        spreadsheetId,
+        requestBody: {
+          requests: ranges.map((r) => ({
+            deleteDimension: { range: { sheetId, dimension: "ROWS", ...r } },
+          })),
+        },
+      }),
+    `deleting ${descending.length} rows from "${sheetName}"`
+  );
+};
+
 export const deleteRowAt = async (sheetName, rowNumber) => {
   const client = requireClient();
   const spreadsheetId = getSpreadsheetId();

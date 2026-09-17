@@ -8,7 +8,7 @@ import { storeFieldFile, deleteStoredFile } from "../utils/fileStorage.js";
 
 // The three tracked vehicle documents, looped over wherever all of them get
 // the same treatment (upload, replace, clean up).
-const DOC_FIELDS = ["rcFile", "insuranceFile", "permitFile"];
+const DOC_FIELDS = ["rcFile", "insuranceFile", "permitFile", "plateFile"];
 
 // The body flag the frontend sends to detach a document outright:
 // rcFile -> removeRcFile. Distinct from simply not uploading a new file,

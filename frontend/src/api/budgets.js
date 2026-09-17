@@ -12,22 +12,15 @@ export const fetchBudgets = async () => {
   }
 };
 
-export const setBudget = async (category, monthlyLimit) => {
+// Sends EVERY changed budget in one request. Google Sheets allows 60 writes a
+// minute across the whole app, so saving them one at a time would stall the
+// first time someone fills the page in.
+export const saveBudgets = async (budgets) => {
   try {
-    const response = await apiClient.post(BASE_URL, { category, monthlyLimit });
+    const response = await apiClient.put(BASE_URL, { budgets });
     return response.data;
   } catch (error) {
-    console.error("Error setting budget:", error.response?.data || error);
-    throw new Error(error.response?.data?.message || "Failed to set budget.");
-  }
-};
-
-export const deleteBudget = async (id) => {
-  try {
-    const response = await apiClient.delete(`${BASE_URL}/${id}`);
-    return response.data;
-  } catch (error) {
-    console.error("Error deleting budget:", error.response?.data || error);
-    throw new Error(error.response?.data?.message || "Failed to delete budget.");
+    console.error("Error saving budgets:", error.response?.data || error);
+    throw new Error(error.response?.data?.message || "Failed to save budgets.");
   }
 };

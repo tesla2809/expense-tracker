@@ -3,7 +3,16 @@
 // Same 5 user-facing fields as before (date, expense, amount, master, bill),
 // plus id/userId/timestamps to make it work as a real table.
 import crypto from "crypto";
-import { ensureSheetTab, getAllRows, appendRow, appendRows, updateRowAt, deleteRowAt } from "../utils/sheetsDb.js";
+import {
+  ensureSheetTab,
+  getAllRows,
+  appendRow,
+  appendRows,
+  updateRowAt,
+  updateRowsAt,
+  deleteRowAt,
+  deleteRowsAt,
+} from "../utils/sheetsDb.js";
 
 const SHEET_NAME = "Expenses";
 const HEADERS = ["id", "userId", "date", "expense", "amount", "master", "billFile", "createdAt", "updatedAt", "vehicleId", "litres", "odometer"];
@@ -119,4 +128,56 @@ export const deleteExpenseById = async (id, userId) => {
   if (error) return { error };
   await deleteRowAt(SHEET_NAME, row._row);
   return { expense: toExpense(row) };
+};
+
+// --- master renaming / usage --------------------------------------------
+// A master's NAME is the only link between an expense and its ledger head, so
+// renaming one has to carry every entry with it. One read, then ONE batched
+// write, however many rows are affected.
+export const renameMasterOnExpenses = async (userId, oldName, newName) => {
+  const rows = await getAllRows(SHEET_NAME, HEADERS);
+  const wanted = (oldName || "").trim().toLowerCase();
+  const now = new Date().toISOString();
+  const updates = rows
+    .filter((r) => r.userId === userId && (r.master || "").trim().toLowerCase() === wanted)
+    .map((r) => ({ rowNumber: r._row, rowObject: { ...r, master: newName, updatedAt: now } }));
+
+  if (updates.length) await updateRowsAt(SHEET_NAME, HEADERS, updates);
+  return updates.length;
+};
+
+// How many of this user's entries are filed under a master. Used to refuse
+// deleting one that is still in use.
+export const countExpensesUsingMaster = async (userId, name) => {
+  const rows = await getAllRows(SHEET_NAME, HEADERS);
+  const wanted = (name || "").trim().toLowerCase();
+  return rows.filter((r) => r.userId === userId && (r.master || "").trim().toLowerCase() === wanted).length;
+};
+
+// Deletes many expenses at once: ONE sheet read, then ONE batched delete,
+// however many rows are selected. Rows belonging to someone else, or already
+// gone, are reported back rather than failing the whole request — if one id in
+// a selection of fifty is stale, the other forty-nine should still go.
+export const deleteExpensesByIds = async (ids, userId) => {
+  const rows = await getAllRows(SHEET_NAME, HEADERS);
+  const byId = new Map(rows.map((r) => [r.id, r]));
+
+  const mine = [];
+  const notFound = [];
+  const forbidden = [];
+  for (const id of new Set(ids)) {
+    const row = byId.get(id);
+    if (!row) notFound.push(id);
+    else if (row.userId !== userId) forbidden.push(id);
+    else mine.push(row);
+  }
+
+  if (mine.length) {
+    await deleteRowsAt(
+      SHEET_NAME,
+      mine.map((r) => r._row)
+    );
+  }
+
+  return { deleted: mine.map(toExpense), notFound, forbidden };
 };

@@ -1,6 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { fetchExpenses, addExpense, updateExpense, deleteExpense, bulkAddExpenses } from "/src/api/expenses";
-import { fetchMasters } from "/src/api/meta";
+import {
+  fetchExpenses,
+  addExpense,
+  updateExpense,
+  deleteExpense,
+  bulkAddExpenses,
+  bulkDeleteExpenses,
+} from "/src/api/expenses";
+import { fetchMasterCatalog } from "/src/api/masters";
 import { previewImportSheet } from "/src/api/imports";
 import { fetchSheetsStatus, exportToGoogleSheet, previewFromGoogleSheet, emailExpenseSheet } from "/src/api/sheets";
 import { API_BASE_URL } from "/src/api/config";
@@ -8,7 +15,8 @@ import { DEFAULT_EXPENSE_MASTERS } from "/src/constants/categories";
 import { FILE_PREFIX } from "/src/constants/brand";
 import { downloadCsv } from "/src/utils/exportCsv";
 import MasterAutocomplete from "/src/components/MasterAutocomplete";
-import AlertsStrip, { buildExpenseAlerts } from "/src/components/AlertsStrip";
+import AlertsStrip, { buildExpenseAlerts, buildBudgetAlerts } from "/src/components/AlertsStrip";
+import { fetchBudgets, saveBudgets } from "/src/api/budgets";
 import SuggestInput from "/src/components/SuggestInput";
 import MasterMultiSelect from "/src/components/MasterMultiSelect";
 import { fetchVehicles } from "/src/api/vehicles";
@@ -62,6 +70,10 @@ const Expenses = () => {
   const [rows, setRows] = useState([]);
   const [vehicles, setVehicles] = useState([]);
   const [masters, setMasters] = useState(DEFAULT_EXPENSE_MASTERS);
+  // The same masters, with their ids — what lets the Master dropdown rename
+  // and delete them. `masters` stays a plain list of names because that is all
+  // the suggestion matching needs, and every other caller expects it.
+  const [masterCatalog, setMasterCatalog] = useState([]);
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState(emptyDraft());
   const [savingDraft, setSavingDraft] = useState(false);
@@ -173,13 +185,14 @@ const Expenses = () => {
       setLoading(true);
       const [expenseData, masterData, vehicleData] = await Promise.all([
         fetchExpenses(),
-        fetchMasters(),
+        fetchMasterCatalog(),
         // Only used to offer a vehicle when one is clearly meant — a failure
         // here shouldn't stop the sheet loading.
         fetchVehicles().catch(() => []),
       ]);
       setRows(Array.isArray(expenseData) ? expenseData : []);
-      setMasters(masterData?.length ? masterData : DEFAULT_EXPENSE_MASTERS);
+      setMasterCatalog(Array.isArray(masterData) ? masterData : []);
+      setMasters(masterData?.length ? masterData.map((m) => m.name) : DEFAULT_EXPENSE_MASTERS);
       setVehicles(Array.isArray(vehicleData) ? vehicleData : []);
     } catch (err) {
       notifyError("Failed to load the expense sheet");
@@ -192,12 +205,34 @@ const Expenses = () => {
     loadData();
   }, []);
 
+  // Called after a master is added, renamed or deleted from the dropdown.
+  // A rename rewrites the Master column on every entry that used it, so the
+  // rows have to come back too — refreshing only the name list would leave
+  // the sheet showing the old one.
+  const reloadAfterMasterChange = () => loadData();
+
   const total = useMemo(() => rows.reduce((sum, r) => sum + (Number(r.amount) || 0), 0), [rows]);
 
   // Deliberately built from every row rather than the filtered view — these
   // are standing reminders about the business, not a readout of the current
   // filter.
-  const alerts = useMemo(() => buildExpenseAlerts(rows), [rows]);
+  // Budgets are fetched here purely to power the over-budget reminders; a
+  // failure is non-fatal, the sheet just shows one fewer alert.
+  const [budgets, setBudgets] = useState([]);
+  useEffect(() => {
+    let alive = true;
+    fetchBudgets()
+      .then((b) => alive && setBudgets(Array.isArray(b) ? b : []))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const alerts = useMemo(
+    () => [...buildBudgetAlerts(rows, budgets), ...buildExpenseAlerts(rows)],
+    [rows, budgets]
+  );
 
   // --- Search + filters + group-by (display only — never affects what's actually stored) ---
   const filteredRows = useMemo(() => {
@@ -368,9 +403,174 @@ const Expenses = () => {
     );
   };
 
+
+  // --- Selecting rows for bulk delete -------------------------------------
+  // Selection is by row id, so it survives sorting, grouping and re-rendering.
+  // "Select all" deliberately means "all rows currently VISIBLE" — never the
+  // whole sheet. With a filter applied, ticking the header box and hitting
+  // delete should remove what is on screen and nothing else; anything else
+  // would be a very unpleasant surprise.
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [confirmingBulkDelete, setConfirmingBulkDelete] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+
+  const toggleSelected = (id) =>
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+
+  const visibleIds = useMemo(() => filteredRows.map((r) => r._id), [filteredRows]);
+  const selectedVisibleCount = useMemo(
+    () => visibleIds.filter((id) => selectedIds.has(id)).length,
+    [visibleIds, selectedIds]
+  );
+  const allVisibleSelected = visibleIds.length > 0 && selectedVisibleCount === visibleIds.length;
+
+  const toggleSelectAllVisible = () =>
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (allVisibleSelected) visibleIds.forEach((id) => next.delete(id));
+      else visibleIds.forEach((id) => next.add(id));
+      return next;
+    });
+
+  const clearSelection = () => {
+    setSelectedIds(new Set());
+    setConfirmingBulkDelete(false);
+  };
+
+  const handleBulkDelete = async () => {
+    const ids = [...selectedIds];
+    if (!ids.length) return;
+    setBulkDeleting(true);
+    try {
+      const result = await bulkDeleteExpenses(ids);
+      // Trust the server's list of what actually went, not what was selected —
+      // a row someone else deleted in the meantime should stay off the screen
+      // without pretending we removed it.
+      const gone = new Set(result.deletedIds || ids);
+      setRows((prev) => prev.filter((r) => !gone.has(r._id)));
+      clearSelection();
+      notifySuccess(result.message || `${gone.size} entries deleted`);
+      const stale = (result.skipped?.notFound || []).length;
+      if (stale) notifyError(`${stale} of those had already been removed`);
+    } catch (err) {
+      notifyError(err.message || "Failed to delete those entries");
+    } finally {
+      setBulkDeleting(false);
+    }
+  };
+
+  // --- the Budget column ---------------------------------------------------
+  // A budget belongs to a MASTER, not to a single entry, so every row sharing
+  // a master shows (and edits) the same figure. Typing one on any Diesel row
+  // sets the Diesel budget everywhere at once.
+  //
+  // Deliberately NOT part of FIELD_ORDER: Enter still walks
+  // date -> expense -> amount -> master -> commit, exactly as before. A budget
+  // is set once in a while, not on every entry, so putting it in the entry
+  // path would slow down the thing people do a hundred times a day.
+  const budgetByMaster = useMemo(() => {
+    const map = {};
+    for (const b of budgets) {
+      if (b.monthlyBudget != null) map[(b.master || "").trim().toLowerCase()] = b.monthlyBudget;
+    }
+    return map;
+  }, [budgets]);
+
+  const budgetDirty = useRef(new Set());
+  const budgetTimer = useRef(null);
+
+  // Saves every changed budget in ONE request, a moment after typing stops.
+  // Google Sheets allows 60 writes a minute across the whole app, so one
+  // request per keystroke (or even per master) is not affordable.
+  const flushBudgets = () => {
+    const names = [...budgetDirty.current];
+    if (!names.length) return;
+    budgetDirty.current.clear();
+    setBudgets((current) => {
+      const byKey = {};
+      for (const b of current) byKey[(b.master || "").trim().toLowerCase()] = b;
+      const payload = names.map((name) => {
+        const existing = byKey[name.trim().toLowerCase()];
+        return {
+          master: name,
+          monthlyBudget: existing?.monthlyBudget ?? "",
+          yearlyBudget: existing?.yearlyBudget ?? "",
+        };
+      });
+      saveBudgets(payload).catch((err) => notifyError(err.message || "Couldn't save the budget"));
+      return current;
+    });
+  };
+
+  const setBudgetForMaster = (master, raw) => {
+    const name = (master || "").trim();
+    if (!name) return;
+    const digits = String(raw).replace(/[^\d]/g, "");
+    const value = digits === "" ? null : Number(digits);
+    const key = name.toLowerCase();
+
+    setBudgets((current) => {
+      const i = current.findIndex((b) => (b.master || "").trim().toLowerCase() === key);
+      if (i === -1) return [...current, { master: name, monthlyBudget: value, yearlyBudget: null }];
+      const next = [...current];
+      next[i] = { ...next[i], monthlyBudget: value };
+      return next;
+    });
+
+    budgetDirty.current.add(name);
+    if (budgetTimer.current) clearTimeout(budgetTimer.current);
+    budgetTimer.current = setTimeout(flushBudgets, 1200);
+  };
+
+  // One cell, shared by the draft row and every existing row.
+  //
+  // A render FUNCTION, not a nested component. Declaring a component inside
+  // another component's body gives it a fresh identity on every render, so
+  // React unmounts and remounts it — the input would lose focus after a single
+  // keystroke, making the cell impossible to type in. renderRow above is
+  // written the same way for the same reason.
+  const renderBudgetCell = (master) => {
+    const has = !!(master || "").trim();
+    const value = has ? budgetByMaster[master.trim().toLowerCase()] : undefined;
+    return (
+      <input
+        type="text"
+        inputMode="numeric"
+        disabled={!has}
+        value={value != null ? String(value) : ""}
+        onChange={(e) => setBudgetForMaster(master, e.target.value)}
+        onBlur={flushBudgets}
+        placeholder={has ? "—" : ""}
+        title={has ? `Monthly budget for ${master}` : "Choose a master first"}
+        aria-label={has ? `Monthly budget for ${master}` : "Monthly budget"}
+        className="w-full border border-transparent hover:border-gray-200 dark:hover:border-gray-700 focus:border-gray-300 dark:focus:border-gray-600 rounded-md px-2 py-1.5 text-sm text-right tabular-nums focus:outline-none focus:ring-2 focus:ring-red-400 disabled:bg-transparent disabled:cursor-not-allowed placeholder-gray-300 dark:placeholder-gray-600"
+      />
+    );
+  };
+
   // One table row, used both for the flat list and inside a group.
   const renderRow = (row) => (
-    <tr key={row._id} className="hover:bg-gray-50 dark:hover:bg-gray-900">
+    <tr
+      key={row._id}
+      className={
+        selectedIds.has(row._id)
+          ? "bg-red-50/60 dark:bg-red-900/20"
+          : "hover:bg-gray-50 dark:hover:bg-gray-900"
+      }
+    >
+      <td className="px-3 py-2">
+        <input
+          type="checkbox"
+          checked={selectedIds.has(row._id)}
+          onChange={() => toggleSelected(row._id)}
+          aria-label="Select this row"
+          className="h-4 w-4 accent-red-600 cursor-pointer align-middle"
+        />
+      </td>
       <td className="px-2 py-2">
         <input
           ref={setCellRef(row._id, "date")}
@@ -411,11 +611,16 @@ const Expenses = () => {
           inputRef={setCellRef(row._id, "master")}
           value={row.master}
           masters={masters}
+          catalog={masterCatalog}
+          onCatalogChange={reloadAfterMasterChange}
           onChange={(value) => updateRowField(row._id, "master", value)}
           onBlur={() => saveRow(row._id)}
           onKeyDown={(e) => handleCellKeyDown(e, row._id, "master", { isDraft: false })}
           className="w-full border border-transparent hover:border-gray-200 dark:hover:border-gray-700 focus:border-gray-300 dark:focus:border-gray-600 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
         />
+      </td>
+      <td className="px-2 py-2">
+        {renderBudgetCell(row.master)}
       </td>
       <td className="px-2 py-2 text-center">
         {row.billFile ? (
@@ -599,6 +804,50 @@ const Expenses = () => {
           </div>
         )}
 
+        {selectedIds.size > 0 && (
+          <div className="flex flex-wrap items-center gap-3 bg-red-50 dark:bg-red-900/25 border border-red-200 dark:border-red-800 rounded-lg px-4 py-3 mb-3">
+            <span className="text-sm font-medium text-red-800 dark:text-red-200">
+              {selectedIds.size} {selectedIds.size === 1 ? "entry" : "entries"} selected
+            </span>
+
+            {confirmingBulkDelete ? (
+              <>
+                <span className="text-sm text-red-700 dark:text-red-300">
+                  Delete {selectedIds.size === 1 ? "it" : "them"} permanently?
+                </span>
+                <button
+                  onClick={handleBulkDelete}
+                  disabled={bulkDeleting}
+                  className="flex items-center gap-1.5 bg-red-600 hover:bg-red-700 disabled:opacity-60 text-white text-sm font-medium rounded-lg px-3 py-1.5"
+                >
+                  <FiTrash2 size={14} />
+                  {bulkDeleting ? "Deleting…" : "Yes, delete"}
+                </button>
+                <button
+                  onClick={() => setConfirmingBulkDelete(false)}
+                  disabled={bulkDeleting}
+                  className="text-sm text-gray-600 dark:text-gray-300 hover:underline"
+                >
+                  Cancel
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  onClick={() => setConfirmingBulkDelete(true)}
+                  className="flex items-center gap-1.5 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg px-3 py-1.5"
+                >
+                  <FiTrash2 size={14} />
+                  Delete selected
+                </button>
+                <button onClick={clearSelection} className="text-sm text-gray-600 dark:text-gray-300 hover:underline">
+                  Clear selection
+                </button>
+              </>
+            )}
+          </div>
+        )}
+
         <div className="bg-white dark:bg-gray-800 shadow-lg rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
           {loading ? (
             <div className="flex justify-center items-center h-40">
@@ -609,10 +858,26 @@ const Expenses = () => {
               <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700 text-sm">
                 <thead className="bg-gray-50 dark:bg-gray-900">
                   <tr>
+                    <th className="px-3 py-3 w-10">
+                      <input
+                        type="checkbox"
+                        checked={allVisibleSelected}
+                        ref={(el) => {
+                          // A partial selection shows a dash rather than a tick, so
+                          // "some of these" never looks like "all of these".
+                          if (el) el.indeterminate = selectedVisibleCount > 0 && !allVisibleSelected;
+                        }}
+                        onChange={toggleSelectAllVisible}
+                        aria-label="Select all visible rows"
+                        title="Select everything currently shown"
+                        className="h-4 w-4 accent-red-600 cursor-pointer align-middle"
+                      />
+                    </th>
                     <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase w-36">Date</th>
                     <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Expense</th>
                     <th className="px-3 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase w-32">Amount</th>
                     <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase w-48">Master</th>
+                    <th className="px-3 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase w-32" title="Monthly budget for that master">Budget / mo</th>
                     <th className="px-3 py-3 text-center text-xs font-medium text-gray-500 dark:text-gray-400 uppercase w-20">Bill</th>
                     <th className="px-3 py-3 text-center text-xs font-medium text-gray-500 dark:text-gray-400 uppercase w-16"></th>
                   </tr>
@@ -620,6 +885,7 @@ const Expenses = () => {
                 <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                   {/* Draft row — always present at the top for fast entry, regardless of search/grouping */}
                   <tr className="bg-blue-50/40 dark:bg-blue-900/20">
+                    <td className="px-3 py-2"></td>
                     <td className="px-2 py-2">
                       <input
                         ref={setCellRef("draft", "date")}
@@ -661,12 +927,17 @@ const Expenses = () => {
                         inputRef={setCellRef("draft", "master")}
                         value={draft.master}
                         masters={masters}
+                        catalog={masterCatalog}
+                        onCatalogChange={reloadAfterMasterChange}
                         onChange={(value) => handleDraftChange("master", value)}
                         onBlur={commitDraftIfReady}
                         onKeyDown={(e) => handleCellKeyDown(e, "draft", "master", { isDraft: true })}
                         placeholder="E.g., Fuel"
                         className="w-full border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
                       />
+                    </td>
+                    <td className="px-2 py-2">
+                      {renderBudgetCell(draft.master)}
                     </td>
                     <td className="px-2 py-2 text-center">
                       <label className="inline-flex items-center justify-center cursor-pointer text-gray-400 dark:text-gray-500 hover:text-blue-600 dark:hover:text-blue-400" title="Attach a bill">
@@ -690,7 +961,7 @@ const Expenses = () => {
 
                   {filteredRows.length === 0 && !loading && (
                     <tr>
-                      <td colSpan={6} className="px-4 py-10 text-center text-gray-400 dark:text-gray-500">
+                      <td colSpan={8} className="px-4 py-10 text-center text-gray-400 dark:text-gray-500">
                         {rows.length === 0
                           ? "No expenses yet — start typing in the row above."
                           : "No expenses match your search/filters."}
@@ -709,7 +980,7 @@ const Expenses = () => {
                               className="bg-gray-100 dark:bg-gray-800 cursor-pointer select-none"
                               onClick={() => toggleGroup(group.key)}
                             >
-                              <td colSpan={6} className="px-3 py-2">
+                              <td colSpan={8} className="px-3 py-2">
                                 <div className="flex items-center justify-between">
                                   <span className="flex items-center font-semibold text-gray-700 dark:text-gray-200 text-sm">
                                     {isCollapsed ? <FiChevronRight size={14} className="mr-1.5" /> : <FiChevronDown size={14} className="mr-1.5" />}

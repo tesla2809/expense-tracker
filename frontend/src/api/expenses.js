@@ -94,6 +94,24 @@ export const fetchMonthlyTrend = async (months = 6) => {
   }
 };
 
+
+/**
+ * Delete many entries in ONE request.
+ *
+ * Not a convenience: deleting row by row meant two Google Sheets calls each
+ * (a full read to find the row, then the delete), which crawls and then hits
+ * the write quota partway through a long selection.
+ */
+export const bulkDeleteExpenses = async (ids) => {
+  try {
+    const response = await apiClient.post(`${BASE_URL}/bulk-delete`, { ids });
+    return response.data;
+  } catch (error) {
+    console.error("Error bulk-deleting expenses:", error.response?.data || error);
+    throw new Error(error.response?.data?.message || "Failed to delete those entries.");
+  }
+};
+
 /**
  * Save a batch of reviewed rows (from a file/Google Sheet import preview) as
  * real expense entries in one call. A row with `include: false` is skipped.

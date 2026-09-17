@@ -1,5 +1,13 @@
 import React from "react";
-import { FiAlertTriangle, FiTrendingUp, FiTrendingDown, FiClock, FiTruck, FiFileText } from "react-icons/fi";
+import {
+  FiAlertTriangle,
+  FiTrendingUp,
+  FiTrendingDown,
+  FiClock,
+  FiTruck,
+  FiFileText,
+  FiTarget,
+} from "react-icons/fi";
 
 // Automatic reminders — computed from data the page already has, so nothing
 // here needs anyone to remember to check it. The expense alerts live on the
@@ -101,6 +109,60 @@ export const buildExpenseAlerts = (expenses) => {
       icon: FiFileText,
       title: `${noBill} of ${expenses.length} entries have no bill attached`,
       detail: "Attach them from the Bill column below",
+    });
+  }
+
+  return out;
+};
+
+// --- Budget alerts -------------------------------------------------------
+// Deliberately condensed into at most two lines. One alert per master would
+// mean twenty-one cards in a busy month, which is the same as no alerts at
+// all — nobody reads a wall of warnings.
+export const buildBudgetAlerts = (expenses, budgets) => {
+  const out = [];
+  if (!budgets?.length || !expenses?.length) return out;
+
+  const now = new Date();
+  const thisKey = monthKey(now);
+
+  const spentThisMonth = {};
+  for (const e of expenses) {
+    if (!e.date) continue;
+    const when = new Date(e.date);
+    if (isNaN(when.getTime()) || monthKey(when) !== thisKey) continue;
+    const k = (e.master || "").trim().toLowerCase();
+    spentThisMonth[k] = (spentThisMonth[k] || 0) + (Number(e.amount) || 0);
+  }
+
+  const over = [];
+  const close = [];
+  for (const b of budgets) {
+    if (!b.monthlyBudget || b.monthlyBudget <= 0) continue;
+    // Matched case-insensitively: an entry typed as "diesel" and a budget set
+    // on "Diesel" are the same thing to everyone except a string comparison.
+    const spent = spentThisMonth[(b.master || "").trim().toLowerCase()] || 0;
+    const pct = (spent / b.monthlyBudget) * 100;
+    if (pct > 100) over.push(`${b.master} (${formatCurrency(spent - b.monthlyBudget)} over)`);
+    else if (pct > 85) close.push(`${b.master} (${Math.round(pct)}%)`);
+  }
+
+  const shortlist = (list) => list.slice(0, 3).join(", ") + (list.length > 3 ? ` +${list.length - 3} more` : "");
+
+  if (over.length) {
+    out.push({
+      tone: "critical",
+      icon: FiAlertTriangle,
+      title: `${over.length} master${over.length === 1 ? " is" : "s are"} over budget this month`,
+      detail: shortlist(over),
+    });
+  }
+  if (close.length) {
+    out.push({
+      tone: "warning",
+      icon: FiTarget,
+      title: `${close.length} master${close.length === 1 ? " is" : "s are"} close to the monthly limit`,
+      detail: shortlist(close),
     });
   }
 

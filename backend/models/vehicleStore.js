@@ -20,6 +20,9 @@ const HEADERS = [
   "rcFile",
   "insuranceFile",
   "permitFile",
+  // A photo of the number plate itself. Unlike the documents it has no
+  // expiry date — it is just proof of which vehicle this row is.
+  "plateFile",
   "createdAt",
   "updatedAt",
 ];
@@ -37,6 +40,7 @@ const toVehicle = (row) => ({
   rcFile: row.rcFile || null,
   insuranceFile: row.insuranceFile || null,
   permitFile: row.permitFile || null,
+  plateFile: row.plateFile || null,
   createdAt: row.createdAt,
   updatedAt: row.updatedAt,
 });
@@ -49,7 +53,18 @@ export const listVehiclesByUser = async (userId) => {
     .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
 };
 
-export const createVehicle = async ({ userId, name, numberPlate, rcExpiry, insuranceExpiry, permitExpiry, rcFile, insuranceFile, permitFile }) => {
+export const createVehicle = async ({
+  userId,
+  name,
+  numberPlate,
+  rcExpiry,
+  insuranceExpiry,
+  permitExpiry,
+  rcFile,
+  insuranceFile,
+  permitFile,
+  plateFile,
+}) => {
   const now = new Date().toISOString();
   const row = {
     id: crypto.randomUUID(),
@@ -62,6 +77,7 @@ export const createVehicle = async ({ userId, name, numberPlate, rcExpiry, insur
     rcFile: rcFile || "",
     insuranceFile: insuranceFile || "",
     permitFile: permitFile || "",
+    plateFile: plateFile || "",
     createdAt: now,
     updatedAt: now,
   };
