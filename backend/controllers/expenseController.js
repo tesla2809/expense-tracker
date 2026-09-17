@@ -9,7 +9,7 @@ import { storeFile, deleteStoredFile } from "../utils/fileStorage.js";
 
 // Add Expense (one row of the sheet)
 export const addExpense = async (req, res) => {
-  const { date, expense, amount, master, vehicleId, litres } = req.body;
+  const { date, expense, amount, master, vehicleId, litres, odometer } = req.body;
 
   if (!expense || !amount || !master) {
     return res.status(400).json({ message: "Expense, amount and master are required" });
@@ -25,6 +25,7 @@ export const addExpense = async (req, res) => {
       billFile: await storeFile(req.file),
       vehicleId,
       litres,
+      odometer,
     });
     res.status(201).json(doc);
   } catch (error) {
@@ -86,7 +87,7 @@ export const getMonthlyTrend = async (req, res) => {
 
 // Update Expense (editing a cell/row in the sheet)
 export const updateExpense = async (req, res) => {
-  const { date, expense, amount, master, vehicleId, removeBill, litres } = req.body;
+  const { date, expense, amount, master, vehicleId, removeBill, litres, odometer } = req.body;
 
   try {
     const updates = {};
@@ -96,6 +97,7 @@ export const updateExpense = async (req, res) => {
     if (master !== undefined) updates.master = master;
     if (vehicleId !== undefined) updates.vehicleId = vehicleId;
     if (litres !== undefined) updates.litres = litres;
+    if (odometer !== undefined) updates.odometer = odometer;
 
     // Two different things can happen to a bill: a new file replaces it, or
     // the user detaches it outright (the × in the Bill column). Both need the
@@ -152,7 +154,16 @@ export const bulkAddExpenses = async (req, res) => {
       skipped.push({ row: i + 1, reason: "Missing or invalid expense/amount/master" });
       return;
     }
-    toInsert.push({ date: row.date, expense: row.expense, amount, master: row.master });
+    toInsert.push({
+      date: row.date,
+      expense: row.expense,
+      amount,
+      master: row.master,
+      vehicleId: row.vehicleId,
+      litres: row.litres,
+      odometer: row.odometer,
+      billFile: row.billFile,
+    });
   });
 
   try {

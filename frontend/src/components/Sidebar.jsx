@@ -64,8 +64,8 @@ const Sidebar = ({ isOpen = false, onClose = () => {} }) => {
             {/* User Profile */}
             <div className="px-5 sm:px-6 py-4 border-b border-gray-100 dark:border-gray-700 shrink-0">
               <div className="flex items-center space-x-3 min-w-0">
-                <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center shrink-0">
-                  <span className="text-blue-600 dark:text-blue-400 font-semibold text-lg">
+                <div className="w-10 h-10 rounded-full bg-blue-100 dark:bg-blue-900/40 flex items-center justify-center shrink-0">
+                  <span className="text-blue-600 dark:text-blue-200 font-semibold text-lg">
                     {user.name ? user.name.charAt(0).toUpperCase() : 'U'}
                   </span>
                 </div>

@@ -116,7 +116,7 @@ export const buildVehicleAlerts = (vehicles) => {
   const docs = [
     { key: "rcExpiry", label: "RC" },
     { key: "insuranceExpiry", label: "Insurance" },
-    { key: "permitExpiry", label: "Permit" },
+    // Permit deliberately not tracked — removed from the vehicle sheet.
   ];
 
   const expired = [];

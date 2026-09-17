@@ -2,12 +2,16 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { fetchExpenses, addExpense, updateExpense, deleteExpense, bulkAddExpenses } from "/src/api/expenses";
 import { fetchMasters } from "/src/api/meta";
 import { previewImportSheet } from "/src/api/imports";
-import { fetchSheetsStatus, exportToGoogleSheet, previewFromGoogleSheet } from "/src/api/sheets";
+import { fetchSheetsStatus, exportToGoogleSheet, previewFromGoogleSheet, emailExpenseSheet } from "/src/api/sheets";
 import { API_BASE_URL } from "/src/api/config";
 import { DEFAULT_EXPENSE_MASTERS } from "/src/constants/categories";
 import { downloadCsv } from "/src/utils/exportCsv";
 import MasterAutocomplete from "/src/components/MasterAutocomplete";
 import AlertsStrip, { buildExpenseAlerts } from "/src/components/AlertsStrip";
+import SuggestInput from "/src/components/SuggestInput";
+import MasterMultiSelect from "/src/components/MasterMultiSelect";
+import { fetchVehicles } from "/src/api/vehicles";
+import { looksLikeVehicleExpense, findPossibleDuplicate, duplicateWarning } from "/src/utils/vehicleExpense";
 import {
   FiPlus,
   FiTrash2,
@@ -55,6 +59,7 @@ const FIELD_ORDER = ["date", "expense", "amount", "master"];
 
 const Expenses = () => {
   const [rows, setRows] = useState([]);
+  const [vehicles, setVehicles] = useState([]);
   const [masters, setMasters] = useState(DEFAULT_EXPENSE_MASTERS);
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState(emptyDraft());
@@ -66,14 +71,18 @@ const Expenses = () => {
 
   // --- Filter toolbar: Master + date range, layered on top of the search box ---
   const [showFilters, setShowFilters] = useState(false);
-  const [filterMaster, setFilterMaster] = useState("");
+  const [filterExpense, setFilterExpense] = useState("");
+  const [filterMasters, setFilterMasters] = useState([]); // empty = all masters
   const [filterDateFrom, setFilterDateFrom] = useState("");
   const [filterDateTo, setFilterDateTo] = useState("");
 
-  const activeFilterCount = [filterMaster, filterDateFrom, filterDateTo].filter((v) => v !== "").length;
+  const activeFilterCount =
+    [filterExpense, filterDateFrom, filterDateTo].filter((v) => v !== "").length +
+    (filterMasters.length > 0 ? 1 : 0);
 
   const clearFilters = () => {
-    setFilterMaster("");
+    setFilterExpense("");
+    setFilterMasters([]);
     setFilterDateFrom("");
     setFilterDateTo("");
   };
@@ -81,7 +90,7 @@ const Expenses = () => {
   // Enter walks across the filter controls the same way it walks across a
   // sheet row, so filtering never needs the mouse. The last field's Enter
   // closes the panel — results are already live, so there's nothing to submit.
-  const FILTER_ORDER = ["search", "master", "from", "to"];
+  const FILTER_ORDER = ["search", "expense", "master", "from", "to"];
   const filterRefs = useRef({});
   const setFilterRef = (key) => (el) => {
     filterRefs.current[key] = el;
@@ -108,6 +117,29 @@ const Expenses = () => {
     const set = new Set(rows.map((r) => r.master).filter(Boolean));
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [rows]);
+
+  // Everything already typed into this sheet, offered as suggestions so
+  // nobody has to remember an entry's exact wording to search for it.
+  const expenseSuggestions = useMemo(() => {
+    const set = new Set(rows.map((r) => r.expense).filter(Boolean));
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [rows]);
+
+  const searchSuggestions = useMemo(
+    () => Array.from(new Set([...expenseSuggestions, ...presentMasters])),
+    [expenseSuggestions, presentMasters]
+  );
+
+  // When a vehicle-shaped expense is typed here, we pause the save and ask
+  // which vehicle it belongs to. Held as a promise resolver so the commit
+  // flow can simply await the answer.
+  const [vehiclePrompt, setVehiclePrompt] = useState(null); // { draft, resolve }
+  const askForVehicle = (forDraft) =>
+    new Promise((resolve) => setVehiclePrompt({ draft: forDraft, resolve }));
+  const answerVehiclePrompt = (value) => {
+    vehiclePrompt?.resolve(value);
+    setVehiclePrompt(null);
+  };
 
   const [showImportModal, setShowImportModal] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
@@ -138,9 +170,16 @@ const Expenses = () => {
   const loadData = async () => {
     try {
       setLoading(true);
-      const [expenseData, masterData] = await Promise.all([fetchExpenses(), fetchMasters()]);
+      const [expenseData, masterData, vehicleData] = await Promise.all([
+        fetchExpenses(),
+        fetchMasters(),
+        // Only used to offer a vehicle when one is clearly meant — a failure
+        // here shouldn't stop the sheet loading.
+        fetchVehicles().catch(() => []),
+      ]);
       setRows(Array.isArray(expenseData) ? expenseData : []);
       setMasters(masterData?.length ? masterData : DEFAULT_EXPENSE_MASTERS);
+      setVehicles(Array.isArray(vehicleData) ? vehicleData : []);
     } catch (err) {
       notifyError("Failed to load the expense sheet");
     } finally {
@@ -162,16 +201,18 @@ const Expenses = () => {
   // --- Search + filters + group-by (display only — never affects what's actually stored) ---
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase();
+    const expenseQ = filterExpense.trim().toLowerCase();
     return rows.filter((r) => {
       if (q && !(r.expense || "").toLowerCase().includes(q) && !(r.master || "").toLowerCase().includes(q)) {
         return false;
       }
-      if (filterMaster && r.master !== filterMaster) return false;
+      if (expenseQ && !(r.expense || "").toLowerCase().includes(expenseQ)) return false;
+      if (filterMasters.length > 0 && !filterMasters.includes(r.master)) return false;
       if (filterDateFrom && (!r.date || new Date(r.date) < new Date(filterDateFrom))) return false;
       if (filterDateTo && (!r.date || new Date(r.date) > new Date(filterDateTo))) return false;
       return true;
     });
-  }, [rows, search, filterMaster, filterDateFrom, filterDateTo]);
+  }, [rows, search, filterExpense, filterMasters, filterDateFrom, filterDateTo]);
 
   const groupedRows = useMemo(() => {
     if (groupBy === "none") return null;
@@ -263,6 +304,26 @@ const Expenses = () => {
 
   const commitDraftIfReady = async () => {
     if (!draft.expense.trim() || !draft.amount || !draft.master.trim()) return;
+
+    // Same money, same day, same master as something already in the sheet —
+    // usually a re-entry rather than a genuine second spend.
+    const duplicate = findPossibleDuplicate(draft, rows);
+    if (duplicate) {
+      const vehicleName = duplicate.vehicleId
+        ? vehicles.find((v) => v._id === duplicate.vehicleId)?.name
+        : null;
+      if (!window.confirm(duplicateWarning(duplicate, vehicleName))) return;
+    }
+
+    // A vehicle-shaped expense typed here would otherwise never reach the
+    // vehicle totals, and would likely get entered a second time on the
+    // Vehicles page. Offer to tag it now so it's only ever entered once.
+    let vehicleId;
+    if (vehicles.length > 0 && looksLikeVehicleExpense(draft)) {
+      vehicleId = await askForVehicle(draft);
+      if (vehicleId === "cancelled") return;
+    }
+
     try {
       setSavingDraft(true);
       const saved = await addExpense({
@@ -271,6 +332,7 @@ const Expenses = () => {
         amount: Number(draft.amount),
         master: draft.master.trim(),
         bill: draft.billFileObj || undefined,
+        vehicleId: vehicleId || undefined,
       });
       setRows((prev) => [saved, ...prev]);
       setDraft(emptyDraft());
@@ -368,14 +430,14 @@ const Expenses = () => {
             </a>
             <button
               onClick={() => handleRemoveBill(row._id)}
-              className="text-gray-300 dark:text-gray-600 hover:text-red-600"
+              className="text-gray-300 dark:text-gray-500 hover:text-red-600"
               title="Remove this bill"
             >
               <FiX size={13} />
             </button>
           </div>
         ) : (
-          <label className="inline-flex items-center justify-center cursor-pointer text-gray-300 dark:text-gray-600 hover:text-blue-600 dark:hover:text-blue-400" title="Attach a bill">
+          <label className="inline-flex items-center justify-center cursor-pointer text-gray-300 dark:text-gray-500 hover:text-blue-600 dark:hover:text-blue-400" title="Attach a bill">
             <FiPaperclip size={16} />
             <input
               type="file"
@@ -387,7 +449,7 @@ const Expenses = () => {
         )}
       </td>
       <td className="px-2 py-2 text-center">
-        <button onClick={() => handleDeleteRow(row._id)} className="text-gray-300 dark:text-gray-600 hover:text-red-600" title="Delete row">
+        <button onClick={() => handleDeleteRow(row._id)} className="text-gray-300 dark:text-gray-500 hover:text-red-600" title="Delete row">
           <FiTrash2 size={16} />
         </button>
       </td>
@@ -425,7 +487,7 @@ const Expenses = () => {
               onClick={() => setShowExportModal(true)}
               className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 px-4 py-2.5 rounded-lg shadow-sm hover:bg-gray-50 dark:hover:bg-gray-900 flex items-center text-sm font-medium"
             >
-              <FiGrid size={17} className="mr-2" /> Export to Sheet
+              <FiGrid size={17} className="mr-2" /> Share Sheet
             </button>
           </div>
         </div>
@@ -436,12 +498,12 @@ const Expenses = () => {
         <div className="flex flex-col sm:flex-row gap-3 mb-4">
           <div className="relative flex-1">
             <FiSearch size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 dark:text-gray-500" />
-            <input
-              ref={setFilterRef("search")}
-              type="text"
+            <SuggestInput
+              inputRef={setFilterRef("search")}
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              onChange={setSearch}
               onKeyDown={(e) => handleFilterKeyDown(e, "search")}
+              options={searchSuggestions}
               placeholder="Search by expense or master..."
               className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg pl-9 pr-3 py-2.5 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-red-400"
             />
@@ -480,21 +542,26 @@ const Expenses = () => {
           <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-sm p-4 mb-4">
             <div className="flex flex-wrap items-end gap-4">
               <div>
+                <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Expense</label>
+                <SuggestInput
+                  inputRef={setFilterRef("expense")}
+                  value={filterExpense}
+                  onChange={setFilterExpense}
+                  onKeyDown={(e) => handleFilterKeyDown(e, "expense")}
+                  options={expenseSuggestions}
+                  placeholder="Any expense..."
+                  className="border border-gray-300 dark:border-gray-600 dark:bg-gray-900 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 min-w-[11rem]"
+                />
+              </div>
+              <div>
                 <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Master</label>
-                <select
-                  ref={setFilterRef("master")}
-                  value={filterMaster}
-                  onChange={(e) => setFilterMaster(e.target.value)}
+                <MasterMultiSelect
+                  inputRef={setFilterRef("master")}
                   onKeyDown={(e) => handleFilterKeyDown(e, "master")}
-                  className="border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 min-w-[10rem]"
-                >
-                  <option value="">All masters</option>
-                  {presentMasters.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
-                    </option>
-                  ))}
-                </select>
+                  options={presentMasters}
+                  selected={filterMasters}
+                  onChange={setFilterMasters}
+                />
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">From date</label>
@@ -611,7 +678,7 @@ const Expenses = () => {
                         />
                       </label>
                     </td>
-                    <td className="px-2 py-2 text-center text-gray-300 dark:text-gray-600">
+                    <td className="px-2 py-2 text-center text-gray-300 dark:text-gray-500">
                       {savingDraft ? (
                         <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-b-2 border-red-500 mx-auto"></div>
                       ) : (
@@ -667,6 +734,7 @@ const Expenses = () => {
 
       {showImportModal && (
         <ImportModal
+          existingRows={rows}
           onClose={() => setShowImportModal(false)}
           onImported={() => {
             setShowImportModal(false);
@@ -676,12 +744,80 @@ const Expenses = () => {
       )}
 
       {showExportModal && <ExportModal onClose={() => setShowExportModal(false)} />}
+
+      {vehiclePrompt && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/30">
+          <div className="bg-white dark:bg-gray-800 p-5 sm:p-6 rounded-xl shadow-xl w-full max-w-md border-2 border-gray-200 dark:border-gray-700">
+            <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100 mb-1">
+              Is this a vehicle expense?
+            </h2>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+              "{vehiclePrompt.draft.expense}" under {vehiclePrompt.draft.master} looks like it belongs
+              to a vehicle. Tagging it now keeps it out of the vehicle sheet being entered twice, and
+              counts it in that vehicle's totals.
+            </p>
+
+            <div className="space-y-2 mb-4 max-h-56 overflow-y-auto">
+              {vehicles.map((v) => (
+                <button
+                  key={v._id}
+                  onClick={() => answerVehiclePrompt(v._id)}
+                  className="w-full text-left px-3 py-2.5 rounded-lg border border-gray-200 dark:border-gray-700 hover:border-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 text-sm text-gray-700 dark:text-gray-200"
+                >
+                  <span className="font-medium">{v.name}</span>
+                  {v.numberPlate && (
+                    <span className="text-gray-400 dark:text-gray-500 ml-2">{v.numberPlate}</span>
+                  )}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex justify-between gap-3">
+              <button
+                onClick={() => answerVehiclePrompt("cancelled")}
+                className="px-4 py-2 text-sm font-medium text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => answerVehiclePrompt(null)}
+                className="px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 text-sm font-medium"
+              >
+                Not a vehicle expense
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
 
+// Rows that match something already in the sheet are unticked before the
+// person even sees the preview — importing the same month twice is the
+// easiest way to double every figure, and it's silent when it happens.
+const markDuplicates = (data, existingRows) => {
+  if (!data?.rows) return data;
+  let duplicates = 0;
+  const rows = data.rows.map((r) => {
+    const existing = findPossibleDuplicate(r, existingRows);
+    if (!existing) return r;
+    duplicates += 1;
+    return { ...r, include: false, _duplicateOf: existing };
+  });
+  const warnings = [...(data.warnings || [])];
+  if (duplicates > 0) {
+    warnings.push(
+      `${duplicates} row${duplicates === 1 ? " looks" : "s look"} like ${
+        duplicates === 1 ? "an entry" : "entries"
+      } already in the sheet (same date, amount and master) — unticked below. Tick them if they really are separate.`
+    );
+  }
+  return { ...data, rows, warnings };
+};
+
 // --- Import modal: upload a file OR pull from a live Google Sheet, review, then save ---
-const ImportModal = ({ onClose, onImported }) => {
+const ImportModal = ({ onClose, onImported, existingRows = [] }) => {
   const [mode, setMode] = useState("file"); // "file" | "sheet"
   const [sheetUrl, setSheetUrl] = useState("");
   const [loadingPreview, setLoadingPreview] = useState(false);
@@ -694,7 +830,7 @@ const ImportModal = ({ onClose, onImported }) => {
     try {
       setLoadingPreview(true);
       const data = await previewImportSheet(file);
-      setPreview(data);
+      setPreview(markDuplicates(data, existingRows));
     } catch (err) {
       notifyError(err.message || "Couldn't read that file");
     } finally {
@@ -711,7 +847,7 @@ const ImportModal = ({ onClose, onImported }) => {
     try {
       setLoadingPreview(true);
       const data = await previewFromGoogleSheet(sheetUrl.trim());
-      setPreview(data);
+      setPreview(markDuplicates(data, existingRows));
     } catch (err) {
       notifyError(err.message || "Couldn't read that Google Sheet");
     } finally {
@@ -841,7 +977,14 @@ const ImportModal = ({ onClose, onImported }) => {
                       <td className="px-3 py-2 whitespace-nowrap">{r.date}</td>
                       <td className="px-3 py-2">{r.expense}</td>
                       <td className="px-3 py-2 text-right">{r.amount ?? "—"}</td>
-                      <td className="px-3 py-2">{r.master}</td>
+                      <td className="px-3 py-2">
+                        {r.master}
+                        {r._duplicateOf && (
+                          <span className="block text-[11px] text-amber-600 dark:text-amber-400">
+                            possible duplicate
+                          </span>
+                        )}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -870,15 +1013,45 @@ const ImportModal = ({ onClose, onImported }) => {
   );
 };
 
-// --- Export modal: push everything into a live Google Sheet ---
+// --- Export modal: email the sheet, or push it into a Google Sheet you own ---
+//
+// Emailing is the default because it needs no setup from anyone: type an
+// address, hit send. The app deliberately does NOT create a Google Sheet and
+// share it — service accounts on free Google accounts have zero Drive storage
+// quota, so creating one is impossible. Emailing an .xlsx gets the same result
+// with less friction, and Gmail's "Open with Google Sheets" turns it into a
+// live Sheet in one click.
 const ExportModal = ({ onClose }) => {
   const [status, setStatus] = useState(null);
+  const [mode, setMode] = useState("email"); // "email" | "sheet"
+
+  const [email, setEmail] = useState("");
+  const [note, setNote] = useState("");
+  const [sending, setSending] = useState(false);
+
   const [sheetUrl, setSheetUrl] = useState("");
   const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
-    fetchSheetsStatus().then(setStatus);
+    fetchSheetsStatus().then(setStatus).catch(() => {});
   }, []);
+
+  const handleEmail = async () => {
+    if (!email.trim()) {
+      notifyError("Enter an email address first");
+      return;
+    }
+    try {
+      setSending(true);
+      const result = await emailExpenseSheet(email.trim(), note.trim());
+      notifySuccess(result.message || "Sheet emailed");
+      onClose();
+    } catch (err) {
+      notifyError(err.message || "Failed to send");
+    } finally {
+      setSending(false);
+    }
+  };
 
   const handleExport = async () => {
     if (!sheetUrl.trim()) {
@@ -896,44 +1069,102 @@ const ExportModal = ({ onClose }) => {
     }
   };
 
+  const tabClass = (active) =>
+    `px-4 py-2 rounded-lg text-sm font-medium ${
+      active ? "bg-red-600 text-white" : "bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300"
+    }`;
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/30">
       <div className="bg-white dark:bg-gray-800 p-5 sm:p-6 rounded-xl shadow-xl w-full max-w-md relative border-2 border-gray-200 dark:border-gray-700">
-        <div className="flex justify-between items-center mb-4 border-b pb-3">
+        <div className="flex justify-between items-center mb-4 border-b border-gray-100 dark:border-gray-700 pb-3">
           <h2 className="text-xl font-bold text-gray-800 dark:text-gray-100 flex items-center">
-            <FiGrid className="mr-2" /> Export to Google Sheet
+            <FiGrid className="mr-2" /> Share the Sheet
           </h2>
           <button onClick={onClose} className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300">
             <FiX size={20} />
           </button>
         </div>
 
-        {status && !status.configured && (
-          <div className="mb-4 bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 rounded-lg p-3 text-xs sm:text-sm text-amber-800 dark:text-amber-200">
-            Google Sheets sync isn't set up on the server yet — ask whoever manages hosting to add the
-            <code className="mx-1 px-1 bg-amber-100 rounded">GOOGLE_SERVICE_ACCOUNT_KEY</code>
-            env var (see <code className="px-1 bg-amber-100 rounded">backend/.env.example</code>).
-          </div>
-        )}
+        <div className="flex gap-2 mb-4">
+          <button onClick={() => setMode("email")} className={tabClass(mode === "email")}>
+            Email it
+          </button>
+          <button onClick={() => setMode("sheet")} className={tabClass(mode === "sheet")}>
+            To a Google Sheet
+          </button>
+        </div>
 
-        <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">
-          Paste the link (or ID) of a Google Sheet that's been shared with the app's service account as an Editor.
-          This replaces that Sheet's contents with everything currently in this expense sheet.
-        </p>
-        <input
-          type="text"
-          value={sheetUrl}
-          onChange={(e) => setSheetUrl(e.target.value)}
-          placeholder="https://docs.google.com/spreadsheets/d/..."
-          className="w-full border border-gray-300 dark:border-gray-600 p-2.5 rounded-lg text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-red-500"
-        />
-        <button
-          onClick={handleExport}
-          disabled={exporting}
-          className="w-full bg-red-600 text-white px-4 py-2.5 rounded-lg hover:bg-red-700 text-sm font-medium disabled:opacity-60"
-        >
-          {exporting ? "Exporting..." : "Export"}
-        </button>
+        {mode === "email" ? (
+          <>
+            {status && status.emailConfigured === false && (
+              <div className="mb-4 bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 rounded-lg p-3 text-xs sm:text-sm text-amber-800 dark:text-amber-200">
+                Email isn't set up on the server yet — it needs
+                <code className="mx-1 px-1 bg-amber-100 dark:bg-amber-900/50 rounded">EMAIL_USER</code> and
+                <code className="mx-1 px-1 bg-amber-100 dark:bg-amber-900/50 rounded">EMAIL_APP_PASSWORD</code>
+                (the same two the password reset needs). See
+                <code className="ml-1 px-1 bg-amber-100 dark:bg-amber-900/50 rounded">backend/.env.example</code>.
+              </div>
+            )}
+
+            <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">
+              Sends the whole expense sheet as a spreadsheet attachment. No setup needed at the other
+              end — in Gmail they can click the file and choose "Open with Google Sheets".
+            </p>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleEmail()}
+              placeholder="name@example.com"
+              className="w-full border border-gray-300 dark:border-gray-600 dark:bg-gray-900 p-2.5 rounded-lg text-sm mb-3 focus:outline-none focus:ring-2 focus:ring-red-500"
+            />
+            <textarea
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              rows={2}
+              placeholder="Optional message to include..."
+              className="w-full border border-gray-300 dark:border-gray-600 dark:bg-gray-900 p-2.5 rounded-lg text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-red-500"
+            />
+            <button
+              onClick={handleEmail}
+              disabled={sending}
+              className="w-full bg-red-600 text-white px-4 py-2.5 rounded-lg hover:bg-red-700 text-sm font-medium disabled:opacity-60"
+            >
+              {sending ? "Sending..." : "Send Sheet"}
+            </button>
+          </>
+        ) : (
+          <>
+            {status && !status.configured && (
+              <div className="mb-4 bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 rounded-lg p-3 text-xs sm:text-sm text-amber-800 dark:text-amber-200">
+                Google Sheets sync isn't set up on the server yet — it needs the
+                <code className="mx-1 px-1 bg-amber-100 dark:bg-amber-900/50 rounded">GOOGLE_SERVICE_ACCOUNT_KEY</code>
+                env var (see <code className="px-1 bg-amber-100 dark:bg-amber-900/50 rounded">backend/.env.example</code>).
+              </div>
+            )}
+
+            <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">
+              For a Sheet you want kept up to date in place. Paste the link of a Google Sheet shared
+              with the app's service account as an Editor — its contents get replaced with everything
+              in this expense sheet.
+            </p>
+            <input
+              type="text"
+              value={sheetUrl}
+              onChange={(e) => setSheetUrl(e.target.value)}
+              placeholder="https://docs.google.com/spreadsheets/d/..."
+              className="w-full border border-gray-300 dark:border-gray-600 dark:bg-gray-900 p-2.5 rounded-lg text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-red-500"
+            />
+            <button
+              onClick={handleExport}
+              disabled={exporting}
+              className="w-full bg-red-600 text-white px-4 py-2.5 rounded-lg hover:bg-red-700 text-sm font-medium disabled:opacity-60"
+            >
+              {exporting ? "Exporting..." : "Export"}
+            </button>
+          </>
+        )}
       </div>
     </div>
   );

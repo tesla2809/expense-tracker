@@ -43,7 +43,7 @@ const ResetPassword = () => {
 
         {done ? (
           <div className="text-center">
-            <p className="text-green-700 bg-green-50 border border-green-200 rounded-md p-3 mb-4">
+            <p className="text-green-700 bg-green-50 dark:bg-green-900/30 border border-green-200 rounded-md p-3 mb-4">
               Password updated — taking you to the login page...
             </p>
           </div>

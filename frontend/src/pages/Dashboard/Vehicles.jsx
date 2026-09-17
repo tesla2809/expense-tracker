@@ -6,6 +6,9 @@ import { API_BASE_URL } from "/src/api/config";
 import { DEFAULT_EXPENSE_MASTERS } from "/src/constants/categories";
 import MasterAutocomplete from "/src/components/MasterAutocomplete";
 import AlertsStrip, { buildVehicleAlerts } from "/src/components/AlertsStrip";
+import SuggestInput from "/src/components/SuggestInput";
+import MasterMultiSelect from "/src/components/MasterMultiSelect";
+import { findPossibleDuplicate, duplicateWarning } from "/src/utils/vehicleExpense";
 import {
   FiPlus,
   FiTrash2,
@@ -65,10 +68,13 @@ const DATE_STATUS_CLASSES = {
 
 // The 3 tracked vehicle documents — looped over to generate matching columns
 // in both the draft row and every existing vehicle row.
+// Permit was dropped at Rishi's request — the column and its reminder are
+// gone from the UI, but permitExpiry/permitFile stay in the sheet so no
+// existing data is destroyed and it can be brought back by re-adding the row
+// below.
 const DOC_FIELDS = [
   { key: "rc", label: "RC", expiryField: "rcExpiry", fileField: "rcFile" },
   { key: "insurance", label: "Insurance", expiryField: "insuranceExpiry", fileField: "insuranceFile" },
-  { key: "permit", label: "Permit", expiryField: "permitExpiry", fileField: "permitFile" },
 ];
 const LAST_DOC_FIELD = DOC_FIELDS[DOC_FIELDS.length - 1];
 
@@ -89,8 +95,8 @@ const emptyVehicleDraft = () => ({
 // Column order for the consolidated Vehicle Expense Sheet below — same
 // "type across, it saves" pattern as the main Expense Sheet, with a Vehicle
 // column added so any vehicle's expense can be logged from one place.
-const EXPENSE_FIELD_ORDER = ["date", "vehicleId", "expense", "amount", "master", "litres"];
-const emptyExpenseDraft = () => ({ date: todayStr(), vehicleId: "", expense: "", amount: "", master: "", litres: "", billFileObj: null });
+const EXPENSE_FIELD_ORDER = ["date", "vehicleId", "expense", "amount", "master", "litres", "odometer"];
+const emptyExpenseDraft = () => ({ date: todayStr(), vehicleId: "", expense: "", amount: "", master: "", litres: "", odometer: "", billFileObj: null });
 
 // Litres only makes sense on a fuel entry, so the Litres cell is live on those
 // rows and a quiet dash everywhere else. Matching on the words rather than the
@@ -163,27 +169,26 @@ const Vehicles = () => {
   // --- Filter toolbar: Vehicle + Master + date range ---
   const [showExpenseFilters, setShowExpenseFilters] = useState(false);
   const [filterVehicleId, setFilterVehicleId] = useState("");
-  const [filterExpenseMaster, setFilterExpenseMaster] = useState("");
+  const [filterExpenseText, setFilterExpenseText] = useState("");
+  const [filterExpenseMasters, setFilterExpenseMasters] = useState([]); // empty = all
   const [filterExpenseDateFrom, setFilterExpenseDateFrom] = useState("");
   const [filterExpenseDateTo, setFilterExpenseDateTo] = useState("");
 
-  const activeExpenseFilterCount = [
-    filterVehicleId,
-    filterExpenseMaster,
-    filterExpenseDateFrom,
-    filterExpenseDateTo,
-  ].filter((v) => v !== "").length;
+  const activeExpenseFilterCount =
+    [filterVehicleId, filterExpenseText, filterExpenseDateFrom, filterExpenseDateTo].filter((v) => v !== "")
+      .length + (filterExpenseMasters.length > 0 ? 1 : 0);
 
   const clearExpenseFilters = () => {
     setFilterVehicleId("");
-    setFilterExpenseMaster("");
+    setFilterExpenseText("");
+    setFilterExpenseMasters([]);
     setFilterExpenseDateFrom("");
     setFilterExpenseDateTo("");
   };
 
   // Enter walks across the filter controls, same as it walks across a sheet
   // row — the whole page stays keyboard-only. The last field closes the panel.
-  const EXPENSE_FILTER_ORDER = ["search", "vehicle", "master", "from", "to"];
+  const EXPENSE_FILTER_ORDER = ["search", "expense", "vehicle", "master", "from", "to"];
   const expenseFilterRefs = useRef({});
   const setExpenseFilterRef = (key) => (el) => {
     expenseFilterRefs.current[key] = el;
@@ -285,28 +290,79 @@ const Vehicles = () => {
 
   const vehiclesById = useMemo(() => new Map(vehicles.map((v) => [v._id, v])), [vehicles]);
 
-  // Fuel summary per vehicle — litres bought, spend, and the average rate
-  // actually paid. A vehicle's own average is the yardstick each of its fills
-  // is measured against, since pump prices differ by area and over time.
+  // Fuel summary per vehicle: what was paid per litre, and how far the truck
+  // actually went on it.
+  //
+  // Mileage uses the standard full-tank method — distance since the previous
+  // fill, divided by the litres put in at THIS fill. That means the first fill
+  // for a vehicle can never have a mileage (there is nothing to measure from),
+  // and a reading lower than the one before it is treated as a bad entry
+  // rather than a negative distance.
   const fuelSummary = useMemo(() => {
     return vehicles
       .map((vehicle) => {
-        const fills = (expensesByVehicle.get(vehicle._id) || []).filter(
-          (e) => isFuelMaster(e.master) && Number(e.litres) > 0
-        );
+        const fills = (expensesByVehicle.get(vehicle._id) || [])
+          .filter((e) => isFuelMaster(e.master) && Number(e.litres) > 0)
+          .sort((a, b) => new Date(a.date) - new Date(b.date));
         if (!fills.length) return null;
-        const litres = fills.reduce((s2, e) => s2 + Number(e.litres), 0);
-        const spend = fills.reduce((s2, e) => s2 + (Number(e.amount) || 0), 0);
+
+        const litres = fills.reduce((acc, e) => acc + Number(e.litres), 0);
+        const spend = fills.reduce((acc, e) => acc + (Number(e.amount) || 0), 0);
         const avgRate = litres > 0 ? spend / litres : 0;
-        // Flag the dearest fill when it is more than 15% above this vehicle's
-        // own average — high enough to ignore normal pump-price drift.
+
+        // Walk the fills in date order, pairing each against the last one that
+        // carried a usable odometer reading.
+        const legs = [];
+        let badReadings = 0;
+        let previous = null;
+        for (const fill of fills) {
+          const reading = Number(fill.odometer);
+          if (!reading || reading <= 0) continue;
+          if (previous) {
+            const distance = reading - previous;
+            if (distance <= 0) badReadings += 1;
+            else legs.push({ row: fill, distance, kmPerLitre: distance / Number(fill.litres) });
+          }
+          previous = reading;
+        }
+
+        const distanceTotal = legs.reduce((acc, l) => acc + l.distance, 0);
+        const litresOverLegs = legs.reduce((acc, l) => acc + Number(l.row.litres), 0);
+        // Weighted by litres rather than averaging the per-leg figures, so one
+        // small top-up doesn't swing the number as much as a full tank.
+        const avgKmPerLitre = litresOverLegs > 0 ? distanceTotal / litresOverLegs : null;
+
+        // Dearest fill — the inflated-bill check.
         let dearest = null;
         for (const f of fills) {
           const rate = ratePerLitre(f);
           if (rate && (!dearest || rate > dearest.rate)) dearest = { row: f, rate };
         }
-        const flagged = dearest && avgRate > 0 && dearest.rate > avgRate * 1.15 ? dearest : null;
-        return { vehicle, fills: fills.length, litres, spend, avgRate, flagged };
+        const dearFlag = dearest && avgRate > 0 && dearest.rate > avgRate * 1.15 ? dearest : null;
+
+        // Worst mileage — the fuel-going-missing check. More than 20% below
+        // this vehicle's own average is worth a look; anything less is normal
+        // variation between loaded and empty runs.
+        let worst = null;
+        for (const leg of legs) {
+          if (!worst || leg.kmPerLitre < worst.kmPerLitre) worst = leg;
+        }
+        const mileageFlag =
+          worst && avgKmPerLitre && legs.length >= 3 && worst.kmPerLitre < avgKmPerLitre * 0.8 ? worst : null;
+
+        return {
+          vehicle,
+          fills: fills.length,
+          litres,
+          spend,
+          avgRate,
+          avgKmPerLitre,
+          distanceTotal,
+          legs: legs.length,
+          badReadings,
+          dearFlag,
+          mileageFlag,
+        };
       })
       .filter(Boolean);
   }, [vehicles, expensesByVehicle]);
@@ -330,8 +386,26 @@ const Vehicles = () => {
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [vehicleExpenseRows]);
 
+  // Suggestions drawn from what's already logged against vehicles.
+  const vehicleExpenseSuggestions = useMemo(
+    () => Array.from(new Set(vehicleExpenseRows.map((r) => r.expense).filter(Boolean))).sort((a, b) => a.localeCompare(b)),
+    [vehicleExpenseRows]
+  );
+  const vehicleSearchSuggestions = useMemo(
+    () =>
+      Array.from(
+        new Set([
+          ...vehicleExpenseSuggestions,
+          ...presentExpenseMasters,
+          ...vehicles.map((v) => v.name).filter(Boolean),
+        ])
+      ),
+    [vehicleExpenseSuggestions, presentExpenseMasters, vehicles]
+  );
+
   const filteredVehicleExpenseRows = useMemo(() => {
     const q = expenseSearch.trim().toLowerCase();
+    const expenseQ = filterExpenseText.trim().toLowerCase();
     return vehicleExpenseRows.filter((r) => {
       if (q) {
         const matches =
@@ -340,8 +414,9 @@ const Vehicles = () => {
           (vehiclesById.get(r.vehicleId)?.name || "").toLowerCase().includes(q);
         if (!matches) return false;
       }
+      if (expenseQ && !(r.expense || "").toLowerCase().includes(expenseQ)) return false;
       if (filterVehicleId && r.vehicleId !== filterVehicleId) return false;
-      if (filterExpenseMaster && r.master !== filterExpenseMaster) return false;
+      if (filterExpenseMasters.length > 0 && !filterExpenseMasters.includes(r.master)) return false;
       if (filterExpenseDateFrom && (!r.date || new Date(r.date) < new Date(filterExpenseDateFrom))) return false;
       if (filterExpenseDateTo && (!r.date || new Date(r.date) > new Date(filterExpenseDateTo))) return false;
       return true;
@@ -351,7 +426,8 @@ const Vehicles = () => {
     expenseSearch,
     vehiclesById,
     filterVehicleId,
-    filterExpenseMaster,
+    filterExpenseText,
+    filterExpenseMasters,
     filterExpenseDateFrom,
     filterExpenseDateTo,
   ]);
@@ -500,6 +576,15 @@ const Vehicles = () => {
 
   const commitExpenseDraftIfReady = async () => {
     if (!expenseDraft.vehicleId || !expenseDraft.expense.trim() || !expenseDraft.amount || !expenseDraft.master.trim()) return;
+
+    // Checked against EVERY expense, not just vehicle-tagged ones — the common
+    // mistake is the same spend already sitting untagged on the main sheet.
+    const duplicate = findPossibleDuplicate(expenseDraft, expenses);
+    if (duplicate) {
+      const vehicleName = duplicate.vehicleId ? vehiclesById.get(duplicate.vehicleId)?.name : null;
+      if (!window.confirm(duplicateWarning(duplicate, vehicleName))) return;
+    }
+
     try {
       setSavingExpenseDraft(true);
       const saved = await addExpense({
@@ -510,6 +595,7 @@ const Vehicles = () => {
         bill: expenseDraft.billFileObj || undefined,
         vehicleId: expenseDraft.vehicleId,
         litres: isFuelMaster(expenseDraft.master) ? expenseDraft.litres : "",
+        odometer: isFuelMaster(expenseDraft.master) ? expenseDraft.odometer : "",
       });
       setExpenses((prev) => [saved, ...prev]);
       // Keep the vehicle selected — logging several expenses for the same
@@ -544,6 +630,7 @@ const Vehicles = () => {
         master: row.master,
         vehicleId: row.vehicleId,
         litres: isFuelMaster(row.master) ? row.litres ?? "" : "",
+        odometer: isFuelMaster(row.master) ? row.odometer ?? "" : "",
       });
     } catch (err) {
       notifyError(err.message || "Failed to save that change");
@@ -665,7 +752,25 @@ const Vehicles = () => {
             )}
           </>
         ) : (
-          <span className="block text-center text-gray-300 dark:text-gray-600 text-sm">—</span>
+          <span className="block text-center text-gray-300 dark:text-gray-500 text-sm">—</span>
+        )}
+      </td>
+      <td className="px-2 py-2">
+        {isFuelMaster(row.master) ? (
+          <input
+            ref={setExpenseCellRef(row._id, "odometer")}
+            type="number"
+            value={row.odometer ?? ""}
+            onChange={(e) => updateExpenseField(row._id, "odometer", e.target.value)}
+            onBlur={() => saveExpenseRow(row._id)}
+            onKeyDown={(e) => handleExpenseCellKeyDown(e, row._id, "odometer", { isDraft: false })}
+            min="0"
+            step="1"
+            placeholder="km"
+            className="w-full border border-transparent hover:border-gray-200 dark:hover:border-gray-700 focus:border-gray-300 dark:focus:border-gray-600 rounded-md px-2 py-1.5 text-sm text-right focus:outline-none focus:ring-2 focus:ring-red-400"
+          />
+        ) : (
+          <span className="block text-center text-gray-300 dark:text-gray-500 text-sm">—</span>
         )}
       </td>
       <td className="px-2 py-2 text-center">
@@ -680,7 +785,7 @@ const Vehicles = () => {
             <FiPaperclip size={16} />
           </a>
         ) : (
-          <label className="inline-flex items-center justify-center cursor-pointer text-gray-300 dark:text-gray-600 hover:text-blue-600 dark:hover:text-blue-400" title="Attach a bill">
+          <label className="inline-flex items-center justify-center cursor-pointer text-gray-300 dark:text-gray-500 hover:text-blue-600 dark:hover:text-blue-400" title="Attach a bill">
             <FiPaperclip size={16} />
             <input
               type="file"
@@ -692,7 +797,7 @@ const Vehicles = () => {
         )}
       </td>
       <td className="px-2 py-2 text-center">
-        <button onClick={() => handleDeleteExpenseRow(row._id)} className="text-gray-300 dark:text-gray-600 hover:text-red-600" title="Delete row">
+        <button onClick={() => handleDeleteExpenseRow(row._id)} className="text-gray-300 dark:text-gray-500 hover:text-red-600" title="Delete row">
           <FiTrash2 size={16} />
         </button>
       </td>
@@ -775,7 +880,7 @@ const Vehicles = () => {
                       </div>
                     </td>
                   ))}
-                  <td className="px-2 py-2 text-center text-gray-300 dark:text-gray-600">
+                  <td className="px-2 py-2 text-center text-gray-300 dark:text-gray-500">
                     {savingVehicleDraft ? (
                       <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-b-2 border-red-500 mx-auto"></div>
                     ) : (
@@ -845,14 +950,14 @@ const Vehicles = () => {
                                 </a>
                                 <button
                                   onClick={() => handleRemoveDoc(vehicle._id, f.fileField, f.label)}
-                                  className="text-gray-300 dark:text-gray-600 hover:text-red-600"
+                                  className="text-gray-300 dark:text-gray-500 hover:text-red-600"
                                   title={`Remove ${f.label}`}
                                 >
                                   <FiX size={12} />
                                 </button>
                               </span>
                             ) : (
-                              <label className="shrink-0 cursor-pointer text-gray-300 dark:text-gray-600 hover:text-blue-600 dark:hover:text-blue-400" title={`Attach ${f.label}`}>
+                              <label className="shrink-0 cursor-pointer text-gray-300 dark:text-gray-500 hover:text-blue-600 dark:hover:text-blue-400" title={`Attach ${f.label}`}>
                                 <FiPaperclip size={14} />
                                 <input
                                   type="file"
@@ -867,7 +972,7 @@ const Vehicles = () => {
                       );
                     })}
                     <td className="px-2 py-2 text-center">
-                      <button onClick={() => handleDeleteVehicle(vehicle)} className="text-gray-300 dark:text-gray-600 hover:text-red-600" title="Delete vehicle">
+                      <button onClick={() => handleDeleteVehicle(vehicle)} className="text-gray-300 dark:text-gray-500 hover:text-red-600" title="Delete vehicle">
                         <FiTrash2 size={16} />
                       </button>
                     </td>
@@ -905,11 +1010,11 @@ const Vehicles = () => {
                       <td className="px-3 py-2 font-medium text-gray-700 dark:text-gray-200 whitespace-nowrap sticky left-0 bg-white dark:bg-gray-800">{vehicle.name}</td>
                       {VEHICLE_BREAKDOWN_MASTERS.map((m) => (
                         <td key={m} className="px-3 py-2 text-right text-gray-600 dark:text-gray-300 whitespace-nowrap">
-                          {byMaster[m] > 0 ? formatCurrency(byMaster[m]) : <span className="text-gray-300 dark:text-gray-600">—</span>}
+                          {byMaster[m] > 0 ? formatCurrency(byMaster[m]) : <span className="text-gray-300 dark:text-gray-500">—</span>}
                         </td>
                       ))}
                       <td className="px-3 py-2 text-right text-gray-600 dark:text-gray-300 whitespace-nowrap">
-                        {other > 0 ? formatCurrency(other) : <span className="text-gray-300 dark:text-gray-600">—</span>}
+                        {other > 0 ? formatCurrency(other) : <span className="text-gray-300 dark:text-gray-500">—</span>}
                       </td>
                       <td className="px-3 py-2 text-right font-bold text-red-600 whitespace-nowrap">{formatCurrency(total)}</td>
                     </tr>
@@ -920,11 +1025,11 @@ const Vehicles = () => {
                     <td className="px-3 py-2.5 font-semibold text-gray-700 dark:text-gray-200 whitespace-nowrap sticky left-0 bg-gray-50 dark:bg-gray-900">Grand Total</td>
                     {VEHICLE_BREAKDOWN_MASTERS.map((m) => (
                       <td key={m} className="px-3 py-2.5 text-right font-medium text-gray-700 dark:text-gray-200 whitespace-nowrap">
-                        {breakdownGrandTotals.byMaster[m] > 0 ? formatCurrency(breakdownGrandTotals.byMaster[m]) : <span className="text-gray-300 dark:text-gray-600">—</span>}
+                        {breakdownGrandTotals.byMaster[m] > 0 ? formatCurrency(breakdownGrandTotals.byMaster[m]) : <span className="text-gray-300 dark:text-gray-500">—</span>}
                       </td>
                     ))}
                     <td className="px-3 py-2.5 text-right font-medium text-gray-700 dark:text-gray-200 whitespace-nowrap">
-                      {breakdownGrandTotals.other > 0 ? formatCurrency(breakdownGrandTotals.other) : <span className="text-gray-300 dark:text-gray-600">—</span>}
+                      {breakdownGrandTotals.other > 0 ? formatCurrency(breakdownGrandTotals.other) : <span className="text-gray-300 dark:text-gray-500">—</span>}
                     </td>
                     <td className="px-3 py-2.5 text-right font-bold text-red-600 whitespace-nowrap">{formatCurrency(breakdownGrandTotals.total)}</td>
                   </tr>
@@ -934,46 +1039,72 @@ const Vehicles = () => {
           </div>
         )}
 
-        {/* Fuel summary — what each vehicle actually pays per litre */}
+        {/* Fuel panel — rate paid per litre, and distance actually covered on it */}
         {fuelSummary.length > 0 && (
           <div className="bg-white dark:bg-gray-800 shadow-lg rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden mb-8">
             <div className="px-4 py-3 border-b border-gray-100 dark:border-gray-700">
-              <h2 className="font-semibold text-gray-700 dark:text-gray-200">Fuel Rate Check</h2>
+              <h2 className="font-semibold text-gray-700 dark:text-gray-200">Fuel &amp; Mileage</h2>
               <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                Average price actually paid per litre, per vehicle. A fill more than 15% above a
-                vehicle's own average gets flagged — that usually means an inflated bill.
+                Rate flags a fill more than 15% above a vehicle's own average — usually an inflated
+                bill. Mileage flags a run more than 20% below its average — that's fuel going
+                somewhere other than the engine. Mileage needs an odometer reading on every fill.
               </p>
             </div>
             <div className="overflow-x-auto">
               <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700 text-sm">
                 <thead className="bg-gray-50 dark:bg-gray-900">
                   <tr>
-                    <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase w-40">Vehicle</th>
+                    <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase w-36">Vehicle</th>
                     <th className="px-3 py-2.5 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Fills</th>
                     <th className="px-3 py-2.5 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Litres</th>
-                    <th className="px-3 py-2.5 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Fuel Spend</th>
+                    <th className="px-3 py-2.5 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Spend</th>
                     <th className="px-3 py-2.5 text-right text-xs font-medium text-gray-700 dark:text-gray-200 uppercase">Avg Rate</th>
-                    <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Dearest Fill</th>
+                    <th className="px-3 py-2.5 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Distance</th>
+                    <th className="px-3 py-2.5 text-right text-xs font-medium text-gray-700 dark:text-gray-200 uppercase">Mileage</th>
+                    <th className="px-3 py-2.5 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">Flags</th>
                   </tr>
                 </thead>
                 <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
-                  {fuelSummary.map(({ vehicle, fills, litres, spend, avgRate, flagged }) => (
-                    <tr key={vehicle._id} className="hover:bg-gray-50 dark:hover:bg-gray-900">
-                      <td className="px-3 py-2 font-medium text-gray-700 dark:text-gray-200 whitespace-nowrap">{vehicle.name}</td>
-                      <td className="px-3 py-2 text-right text-gray-600 dark:text-gray-300">{fills}</td>
-                      <td className="px-3 py-2 text-right text-gray-600 dark:text-gray-300 tabular-nums">{litres.toFixed(1)} L</td>
-                      <td className="px-3 py-2 text-right text-gray-600 dark:text-gray-300 tabular-nums">{formatCurrency(spend)}</td>
+                  {fuelSummary.map((f) => (
+                    <tr key={f.vehicle._id} className="hover:bg-gray-50 dark:hover:bg-gray-900">
+                      <td className="px-3 py-2 font-medium text-gray-700 dark:text-gray-200 whitespace-nowrap">{f.vehicle.name}</td>
+                      <td className="px-3 py-2 text-right text-gray-600 dark:text-gray-300">{f.fills}</td>
+                      <td className="px-3 py-2 text-right text-gray-600 dark:text-gray-300 tabular-nums">{f.litres.toFixed(1)} L</td>
+                      <td className="px-3 py-2 text-right text-gray-600 dark:text-gray-300 tabular-nums">{formatCurrency(f.spend)}</td>
                       <td className="px-3 py-2 text-right font-bold text-gray-800 dark:text-gray-100 tabular-nums">
-                        ₹{avgRate.toFixed(2)}/L
+                        ₹{f.avgRate.toFixed(2)}/L
                       </td>
-                      <td className="px-3 py-2 text-xs">
-                        {flagged ? (
-                          <span className="inline-flex items-center gap-1.5 text-red-600 font-medium">
-                            <FiAlertTriangle size={13} className="shrink-0" />
-                            ₹{flagged.rate.toFixed(2)}/L on{" "}
-                            {flagged.row.date ? new Date(flagged.row.date).toLocaleDateString("en-IN") : "—"}
-                          </span>
+                      <td className="px-3 py-2 text-right text-gray-600 dark:text-gray-300 tabular-nums">
+                        {f.distanceTotal > 0 ? `${f.distanceTotal.toLocaleString("en-IN")} km` : <span className="text-gray-300 dark:text-gray-500">—</span>}
+                      </td>
+                      <td className="px-3 py-2 text-right font-bold text-gray-800 dark:text-gray-100 tabular-nums">
+                        {f.avgKmPerLitre ? (
+                          `${f.avgKmPerLitre.toFixed(2)} km/L`
                         ) : (
+                          <span className="font-normal text-xs text-gray-400 dark:text-gray-500">needs odometer</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-xs space-y-1">
+                        {f.dearFlag && (
+                          <span className="flex items-center gap-1.5 text-red-600 dark:text-red-400 font-medium">
+                            <FiAlertTriangle size={13} className="shrink-0" />
+                            ₹{f.dearFlag.rate.toFixed(2)}/L on{" "}
+                            {f.dearFlag.row.date ? new Date(f.dearFlag.row.date).toLocaleDateString("en-IN") : "—"}
+                          </span>
+                        )}
+                        {f.mileageFlag && (
+                          <span className="flex items-center gap-1.5 text-red-600 dark:text-red-400 font-medium">
+                            <FiAlertTriangle size={13} className="shrink-0" />
+                            {f.mileageFlag.kmPerLitre.toFixed(2)} km/L on{" "}
+                            {f.mileageFlag.row.date ? new Date(f.mileageFlag.row.date).toLocaleDateString("en-IN") : "—"}
+                          </span>
+                        )}
+                        {f.badReadings > 0 && (
+                          <span className="block text-amber-600 dark:text-amber-400">
+                            {f.badReadings} odometer reading{f.badReadings === 1 ? "" : "s"} lower than the one before — check for typos
+                          </span>
+                        )}
+                        {!f.dearFlag && !f.mileageFlag && !f.badReadings && (
                           <span className="text-gray-400 dark:text-gray-500">Nothing unusual</span>
                         )}
                       </td>
@@ -1001,12 +1132,12 @@ const Vehicles = () => {
           <div className="flex flex-col sm:flex-row gap-3 mb-4">
             <div className="relative flex-1">
               <FiSearch size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 dark:text-gray-500" />
-              <input
-                ref={setExpenseFilterRef("search")}
-                type="text"
+              <SuggestInput
+                inputRef={setExpenseFilterRef("search")}
                 value={expenseSearch}
-                onChange={(e) => setExpenseSearch(e.target.value)}
+                onChange={setExpenseSearch}
                 onKeyDown={(e) => handleExpenseFilterKeyDown(e, "search")}
+                options={vehicleSearchSuggestions}
                 placeholder="Search by expense, master or vehicle..."
                 className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg pl-9 pr-3 py-2.5 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-red-400"
               />
@@ -1046,6 +1177,18 @@ const Vehicles = () => {
             <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-sm p-4 mb-4">
               <div className="flex flex-wrap items-end gap-4">
                 <div>
+                  <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Expense</label>
+                  <SuggestInput
+                    inputRef={setExpenseFilterRef("expense")}
+                    value={filterExpenseText}
+                    onChange={setFilterExpenseText}
+                    onKeyDown={(e) => handleExpenseFilterKeyDown(e, "expense")}
+                    options={vehicleExpenseSuggestions}
+                    placeholder="Any expense..."
+                    className="border border-gray-300 dark:border-gray-600 dark:bg-gray-900 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 min-w-[11rem]"
+                  />
+                </div>
+                <div>
                   <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Vehicle</label>
                   <select
                     ref={setExpenseFilterRef("vehicle")}
@@ -1064,20 +1207,13 @@ const Vehicles = () => {
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Master</label>
-                  <select
-                    ref={setExpenseFilterRef("master")}
-                    value={filterExpenseMaster}
-                    onChange={(e) => setFilterExpenseMaster(e.target.value)}
+                  <MasterMultiSelect
+                    inputRef={setExpenseFilterRef("master")}
                     onKeyDown={(e) => handleExpenseFilterKeyDown(e, "master")}
-                    className="border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 min-w-[10rem]"
-                  >
-                    <option value="">All masters</option>
-                    {presentExpenseMasters.map((m) => (
-                      <option key={m} value={m}>
-                        {m}
-                      </option>
-                    ))}
-                  </select>
+                    options={presentExpenseMasters}
+                    selected={filterExpenseMasters}
+                    onChange={setFilterExpenseMasters}
+                  />
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">From date</label>
@@ -1130,6 +1266,7 @@ const Vehicles = () => {
                       <th className="px-3 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase w-28">Amount</th>
                       <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase w-44">Master</th>
                       <th className="px-3 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase w-24">Litres</th>
+                      <th className="px-3 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase w-28">Odometer</th>
                       <th className="px-3 py-3 text-center text-xs font-medium text-gray-500 dark:text-gray-400 uppercase w-16">Bill</th>
                       <th className="px-3 py-3 text-center text-xs font-medium text-gray-500 dark:text-gray-400 uppercase w-12"></th>
                     </tr>
@@ -1218,7 +1355,7 @@ const Vehicles = () => {
                             className="w-full border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1.5 text-sm text-right focus:outline-none focus:ring-2 focus:ring-red-400"
                           />
                         ) : (
-                          <span className="block text-center text-gray-300 dark:text-gray-600 text-sm">—</span>
+                          <span className="block text-center text-gray-300 dark:text-gray-500 text-sm">—</span>
                         )}
                       </td>
                       <td className="px-2 py-2 text-center">
@@ -1232,7 +1369,7 @@ const Vehicles = () => {
                           />
                         </label>
                       </td>
-                      <td className="px-2 py-2 text-center text-gray-300 dark:text-gray-600">
+                      <td className="px-2 py-2 text-center text-gray-300 dark:text-gray-500">
                         {savingExpenseDraft ? (
                           <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-b-2 border-red-500 mx-auto"></div>
                         ) : (
@@ -1243,7 +1380,7 @@ const Vehicles = () => {
 
                     {filteredVehicleExpenseRows.length === 0 && (
                       <tr>
-                        <td colSpan={8} className="px-4 py-10 text-center text-gray-400 dark:text-gray-500">
+                        <td colSpan={9} className="px-4 py-10 text-center text-gray-400 dark:text-gray-500">
                           {vehicleExpenseRows.length === 0
                             ? vehicles.length === 0
                               ? "Add a vehicle above first, then log its expenses here."
@@ -1261,7 +1398,7 @@ const Vehicles = () => {
                           return (
                             <React.Fragment key={group.key}>
                               <tr className="bg-gray-100 dark:bg-gray-800 cursor-pointer select-none" onClick={() => toggleExpenseGroup(group.key)}>
-                                <td colSpan={8} className="px-3 py-2">
+                                <td colSpan={9} className="px-3 py-2">
                                   <div className="flex items-center justify-between">
                                     <span className="flex items-center font-semibold text-gray-700 dark:text-gray-200 text-sm">
                                       {isCollapsed ? <FiChevronRight size={14} className="mr-1.5" /> : <FiChevronDown size={14} className="mr-1.5" />}

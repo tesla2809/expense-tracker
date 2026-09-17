@@ -36,3 +36,17 @@ export const previewFromGoogleSheet = async (sheetUrl) => {
     throw new Error(error.response?.data?.message || "Failed to import from Google Sheet.");
   }
 };
+
+/**
+ * Emails the whole expense sheet as an .xlsx attachment to any address.
+ * Needs no Google setup at all on the recipient's side.
+ */
+export const emailExpenseSheet = async (email, note) => {
+  try {
+    const response = await apiClient.post("/sheets/email", { email, note });
+    return response.data;
+  } catch (error) {
+    console.error("Error emailing the expense sheet:", error.response?.data || error);
+    throw new Error(error.response?.data?.message || "Failed to send that email.");
+  }
+};

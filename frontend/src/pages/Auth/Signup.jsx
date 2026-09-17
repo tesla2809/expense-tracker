@@ -49,7 +49,7 @@ const Signup = () => {
         </div>
 
         {signupError && (
-          <div className="mb-4 p-3 bg-red-100 text-red-700 dark:text-red-300 rounded border border-red-200">
+          <div className="mb-4 p-3 bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300 rounded border border-red-200">
             {signupError}
           </div>
         )}

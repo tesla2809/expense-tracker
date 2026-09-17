@@ -1,9 +1,59 @@
 import { listExpensesByUser } from "../models/expenseStore.js";
 import { isGoogleSheetsConfigured, exportExpensesToSheet, readSheetValues } from "../utils/googleSheets.js";
 import { parseSheetValuesToPreview } from "../utils/importParser.js";
+import { listVehiclesByUser } from "../models/vehicleStore.js";
+import { buildExpensesWorkbook, expensesFileName } from "../utils/spreadsheetFile.js";
+import { isEmailConfigured, sendExpenseSheetEmail } from "../utils/mailer.js";
 
 export const getSheetsStatus = (req, res) => {
-  res.json({ configured: isGoogleSheetsConfigured() });
+  res.json({ configured: isGoogleSheetsConfigured(), emailConfigured: isEmailConfigured() });
+};
+
+// A very basic sanity check — the mail server does the real validation, this
+// just stops obvious typos before we build a whole workbook.
+const looksLikeEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
+
+// Emails the expense sheet as an .xlsx attachment. Deliberately NOT "create a
+// Google Sheet and share it": service accounts on free Google accounts have
+// zero Drive storage quota, so the app cannot create a Sheet at all. An
+// emailed file needs no sharing setup and works for any address.
+export const emailSheet = async (req, res) => {
+  const { email, note } = req.body;
+  if (!looksLikeEmail(email)) {
+    return res.status(400).json({ message: "Enter a valid email address" });
+  }
+
+  try {
+    const [expenses, vehicles] = await Promise.all([
+      listExpensesByUser(req.user.id),
+      listVehiclesByUser(req.user.id).catch(() => []),
+    ]);
+    if (expenses.length === 0) {
+      return res.status(400).json({ message: "There are no expenses to send yet" });
+    }
+
+    const ordered = [...expenses].sort((a, b) => new Date(a.date) - new Date(b.date));
+    const vehiclesById = new Map(vehicles.map((v) => [v._id, v]));
+    const buffer = buildExpensesWorkbook(ordered, vehiclesById);
+    const total = ordered.reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
+
+    await sendExpenseSheetEmail({
+      toEmail: email.trim(),
+      fileName: expensesFileName(),
+      buffer,
+      count: ordered.length,
+      total,
+      note,
+    });
+
+    res.json({
+      message: `Sent ${ordered.length} ${ordered.length === 1 ? "entry" : "entries"} to ${email.trim()}`,
+      count: ordered.length,
+    });
+  } catch (error) {
+    console.error("Error emailing the expense sheet:", error.message);
+    res.status(400).json({ message: error.message || "Couldn't send that email" });
+  }
 };
 
 // Pushes every one of the user's expenses into a Google Sheet the user

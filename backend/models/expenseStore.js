@@ -6,7 +6,7 @@ import crypto from "crypto";
 import { ensureSheetTab, getAllRows, appendRow, appendRows, updateRowAt, deleteRowAt } from "../utils/sheetsDb.js";
 
 const SHEET_NAME = "Expenses";
-const HEADERS = ["id", "userId", "date", "expense", "amount", "master", "billFile", "createdAt", "updatedAt", "vehicleId", "litres"];
+const HEADERS = ["id", "userId", "date", "expense", "amount", "master", "billFile", "createdAt", "updatedAt", "vehicleId", "litres", "odometer"];
 
 export const ensureExpensesSheet = () => ensureSheetTab(SHEET_NAME, HEADERS);
 
@@ -29,6 +29,10 @@ const toExpense = (row) => ({
   // Only set on fuel entries. Lets the Vehicles page work out rate per litre
   // (amount / litres) and spot a bill charged above the going rate.
   litres: row.litres === "" || row.litres === undefined ? null : Number(row.litres) || null,
+  // Kilometre reading at the time of a fill. Paired with the previous fill's
+  // reading it gives distance run, and distance / litres gives real mileage —
+  // the only way to spot fuel going missing rather than just being overcharged.
+  odometer: row.odometer === "" || row.odometer === undefined ? null : Number(row.odometer) || null,
 });
 
 const timeOf = (d) => {
@@ -44,7 +48,7 @@ export const listExpensesByUser = async (userId) => {
     .sort((a, b) => timeOf(b.date) - timeOf(a.date) || timeOf(b.createdAt) - timeOf(a.createdAt));
 };
 
-export const createExpense = async ({ userId, date, expense, amount, master, billFile, vehicleId, litres }) => {
+export const createExpense = async ({ userId, date, expense, amount, master, billFile, vehicleId, litres, odometer }) => {
   const now = new Date().toISOString();
   const row = {
     id: crypto.randomUUID(),
@@ -58,6 +62,7 @@ export const createExpense = async ({ userId, date, expense, amount, master, bil
     updatedAt: now,
     vehicleId: vehicleId || "",
     litres: litres === undefined || litres === null || litres === "" ? "" : Number(litres),
+    odometer: odometer === undefined || odometer === null || odometer === "" ? "" : Number(odometer),
   };
   await appendRow(SHEET_NAME, HEADERS, row);
   return toExpense(row);
@@ -74,9 +79,15 @@ export const bulkCreateExpenses = async (userId, rows) => {
     expense: r.expense,
     amount: Number(r.amount),
     master: r.master,
-    billFile: "",
+    billFile: r.billFile || "",
     createdAt: now,
     updatedAt: now,
+    // Optional, and only ever supplied by callers that have them (the seeder,
+    // or a future import that maps these columns). A CSV import leaves them
+    // blank, exactly as before.
+    vehicleId: r.vehicleId || "",
+    litres: r.litres === undefined || r.litres === null || r.litres === "" ? "" : Number(r.litres),
+    odometer: r.odometer === undefined || r.odometer === null || r.odometer === "" ? "" : Number(r.odometer),
   }));
   await appendRows(SHEET_NAME, HEADERS, prepared);
   return prepared.map(toExpense);
@@ -97,6 +108,8 @@ export const updateExpenseById = async (id, userId, updates) => {
   if (updates.date !== undefined) merged.date = new Date(updates.date).toISOString();
   if (updates.amount !== undefined) merged.amount = Number(updates.amount);
   if (updates.litres !== undefined) merged.litres = updates.litres === "" || updates.litres === null ? "" : Number(updates.litres);
+  if (updates.odometer !== undefined)
+    merged.odometer = updates.odometer === "" || updates.odometer === null ? "" : Number(updates.odometer);
   await updateRowAt(SHEET_NAME, HEADERS, row._row, merged);
   return { expense: toExpense(merged) };
 };

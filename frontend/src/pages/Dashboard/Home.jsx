@@ -17,6 +17,8 @@ import {
 } from "recharts";
 import { useAuth } from "/src/context/AuthContext";
 import { useTheme } from "/src/context/ThemeContext";
+import SuggestInput from "/src/components/SuggestInput";
+import MasterMultiSelect from "/src/components/MasterMultiSelect";
 import { FiFilter, FiXCircle, FiX, FiAlertTriangle } from "react-icons/fi";
 
 // --- Palette -----------------------------------------------------------
@@ -77,17 +79,18 @@ const Home = () => {
   // --- Filters (sir's item i: filters on everything, by master and by date) ---
   const [showFilters, setShowFilters] = useState(false);
   const [filterExpense, setFilterExpense] = useState("");
-  const [filterMaster, setFilterMaster] = useState("");
+  const [filterMasters, setFilterMasters] = useState([]); // empty = all masters
   const [filterFrom, setFilterFrom] = useState("");
   const [filterTo, setFilterTo] = useState("");
 
   // --- Drill-down drawer (sir's item ii) ---
   const [drillMaster, setDrillMaster] = useState(null);
 
-  const activeFilterCount = [filterExpense, filterMaster, filterFrom, filterTo].filter((v) => v !== "").length;
+  const activeFilterCount =
+    [filterExpense, filterFrom, filterTo].filter((v) => v !== "").length + (filterMasters.length > 0 ? 1 : 0);
   const clearFilters = () => {
     setFilterExpense("");
-    setFilterMaster("");
+    setFilterMasters([]);
     setFilterFrom("");
     setFilterTo("");
   };
@@ -158,6 +161,11 @@ const Home = () => {
 
   const colorFor = (name) => (name === "Other" ? OTHER_COLOR : masterColors[name] || OTHER_COLOR);
 
+  const expenseSuggestions = useMemo(
+    () => Array.from(new Set(expenses.map((e) => e.expense).filter(Boolean))).sort((a, b) => a.localeCompare(b)),
+    [expenses]
+  );
+
   const allMasters = useMemo(
     () => Array.from(new Set(expenses.map((e) => e.master).filter(Boolean))).sort((a, b) => a.localeCompare(b)),
     [expenses]
@@ -168,12 +176,12 @@ const Home = () => {
     const q = filterExpense.trim().toLowerCase();
     return expenses.filter((e) => {
       if (q && !(e.expense || "").toLowerCase().includes(q)) return false;
-      if (filterMaster && e.master !== filterMaster) return false;
+      if (filterMasters.length > 0 && !filterMasters.includes(e.master)) return false;
       if (filterFrom && (!e.date || new Date(e.date) < new Date(filterFrom))) return false;
       if (filterTo && (!e.date || new Date(e.date) > new Date(filterTo))) return false;
       return true;
     });
-  }, [expenses, filterExpense, filterMaster, filterFrom, filterTo]);
+  }, [expenses, filterExpense, filterMasters, filterFrom, filterTo]);
 
   const total = useMemo(() => filtered.reduce((s, e) => s + (Number(e.amount) || 0), 0), [filtered]);
 
@@ -207,14 +215,40 @@ const Home = () => {
       ? ((thisMonth.total - lastMonth.total) / lastMonth.total) * 100
       : null;
 
-  // --- Master breakdown ----------------------------------------------------
+  // --- Breakdown, on whichever dimension is actually informative -----------
+  // Narrowing to a single master makes a by-master chart pointless: one slice,
+  // 100%. In that case the interesting question is what sits INSIDE that
+  // master, so the charts switch to splitting by the individual expenses.
+  // Two or more masters selected goes back to comparing them against each
+  // other, which is the whole reason for picking several.
+  const drillIntoMaster = filterMasters.length === 1 ? filterMasters[0] : null;
+  const breakdownKey = drillIntoMaster ? "expense" : "master";
+
   const masterTotals = useMemo(() => {
     const totals = {};
-    for (const e of filtered) totals[e.master] = (totals[e.master] || 0) + (Number(e.amount) || 0);
+    for (const e of filtered) {
+      const key = (breakdownKey === "expense" ? e.expense : e.master) || "Unlabelled";
+      totals[key] = (totals[key] || 0) + (Number(e.amount) || 0);
+    }
     return Object.entries(totals)
       .map(([name, value]) => ({ name, value }))
       .sort((a, b) => b.value - a.value);
-  }, [filtered]);
+  }, [filtered, breakdownKey]);
+
+  // Expense slices only exist while drilled into a single master, so there is
+  // no stable entity to pin a colour to — rank order is fine here, and the
+  // master-level rule (colour never moves when filtering) still holds above.
+  const drillColors = useMemo(() => {
+    if (!drillIntoMaster) return null;
+    const map = {};
+    masterTotals.forEach(({ name }, i) => {
+      map[name] = i < seriesColors.length ? seriesColors[i] : OTHER_COLOR;
+    });
+    return map;
+  }, [drillIntoMaster, masterTotals, seriesColors]);
+
+  const sliceColor = (name) =>
+    name === "Other" ? OTHER_COLOR : drillColors ? drillColors[name] || OTHER_COLOR : colorFor(name);
 
   // Past 8 categories a pie becomes unreadable slivers, so the tail folds into
   // one grey "Other" slice that still adds up correctly.
@@ -233,11 +267,12 @@ const Home = () => {
   // --- Drill-down rows -----------------------------------------------------
   const drillRows = useMemo(() => {
     if (!drillMaster) return [];
+    const field = breakdownKey === "expense" ? "expense" : "master";
     const names = drillMaster === "Other" ? otherMasterNames : [drillMaster];
     return filtered
-      .filter((e) => names.includes(e.master))
+      .filter((e) => names.includes(e[field] || "Unlabelled"))
       .sort((a, b) => new Date(b.date) - new Date(a.date));
-  }, [drillMaster, filtered, otherMasterNames]);
+  }, [drillMaster, filtered, otherMasterNames, breakdownKey]);
 
   const drillTotal = useMemo(
     () => drillRows.reduce((s, e) => s + (Number(e.amount) || 0), 0),
@@ -321,34 +356,27 @@ const Home = () => {
               <label className="block text-xs font-medium mb-1" style={{ color: INK.muted }}>
                 Expense
               </label>
-              <input
-                ref={setFilterRef("expense")}
-                type="text"
+              <SuggestInput
+                inputRef={setFilterRef("expense")}
                 value={filterExpense}
-                onChange={(e) => setFilterExpense(e.target.value)}
+                onChange={setFilterExpense}
                 onKeyDown={(e) => handleFilterKeyDown(e, "expense")}
+                options={expenseSuggestions}
                 placeholder="Search expense..."
-                className="border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 min-w-[11rem]"
+                className="border border-gray-300 dark:border-gray-600 dark:bg-gray-900 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 min-w-[11rem]"
               />
             </div>
             <div>
               <label className="block text-xs font-medium mb-1" style={{ color: INK.muted }}>
                 Master
               </label>
-              <select
-                ref={setFilterRef("master")}
-                value={filterMaster}
-                onChange={(e) => setFilterMaster(e.target.value)}
+              <MasterMultiSelect
+                inputRef={setFilterRef("master")}
                 onKeyDown={(e) => handleFilterKeyDown(e, "master")}
-                className="border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 min-w-[11rem]"
-              >
-                <option value="">All masters</option>
-                {allMasters.map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
-                ))}
-              </select>
+                options={allMasters}
+                selected={filterMasters}
+                onChange={setFilterMasters}
+              />
             </div>
             <div>
               <label className="block text-xs font-medium mb-1" style={{ color: INK.muted }}>
@@ -485,10 +513,10 @@ const Home = () => {
         <Card>
           <div className="px-5 py-4 border-b border-gray-100 dark:border-gray-700">
             <h2 className="font-semibold" style={{ color: INK.primary }}>
-              Spend by Master
+              {drillIntoMaster ? `Spend within ${drillIntoMaster}` : "Spend by Master"}
             </h2>
             <p className="text-xs mt-0.5" style={{ color: INK.muted }}>
-              Click any slice to see its entries
+              {drillIntoMaster ? "Split by individual expense" : "Click any slice to see its entries"}
             </p>
           </div>
           <div className="p-4 h-80">
@@ -510,7 +538,7 @@ const Home = () => {
                       {chartMasterData.map((entry) => (
                         <Cell
                           key={entry.name}
-                          fill={colorFor(entry.name)}
+                          fill={sliceColor(entry.name)}
                           stroke={INK.surface}
                           strokeWidth={2}
                         />
@@ -546,10 +574,10 @@ const Home = () => {
         <Card>
           <div className="px-5 py-4 border-b border-gray-100 dark:border-gray-700">
             <h2 className="font-semibold" style={{ color: INK.primary }}>
-              Top Masters
+              {drillIntoMaster ? "Biggest Entries" : "Top Masters"}
             </h2>
             <p className="text-xs mt-0.5" style={{ color: INK.muted }}>
-              Click any bar to see its entries
+              {drillIntoMaster ? `Within ${drillIntoMaster}` : "Click any bar to see its entries"}
             </p>
           </div>
           <div className="p-4 h-80">
@@ -592,7 +620,7 @@ const Home = () => {
                     className="cursor-pointer"
                   >
                     {chartMasterData.map((entry) => (
-                      <Cell key={entry.name} fill={colorFor(entry.name)} />
+                      <Cell key={entry.name} fill={sliceColor(entry.name)} />
                     ))}
                   </Bar>
                 </BarChart>
@@ -627,7 +655,7 @@ const Home = () => {
                 <div className="min-w-0 flex items-center gap-2.5">
                   <span
                     className="w-2 h-2 rounded-full shrink-0"
-                    style={{ backgroundColor: colorFor(expense.master) }}
+                    style={{ backgroundColor: sliceColor(breakdownKey === "expense" ? expense.expense : expense.master) }}
                   />
                   <div className="min-w-0">
                     <p className="font-medium truncate text-sm" style={{ color: INK.primary }}>
@@ -661,7 +689,7 @@ const Home = () => {
                 <div className="flex items-center gap-2">
                   <span
                     className="w-2.5 h-2.5 rounded-full shrink-0"
-                    style={{ backgroundColor: colorFor(drillMaster) }}
+                    style={{ backgroundColor: sliceColor(drillMaster) }}
                   />
                   <h2 className="font-semibold truncate" style={{ color: INK.primary }}>
                     {drillMaster}
@@ -691,7 +719,7 @@ const Home = () => {
                     </p>
                     <p className="text-xs mt-0.5" style={{ color: INK.muted }}>
                       {formatDate(row.date)}
-                      {drillMaster === "Other" && ` · ${row.master}`}
+                      {drillMaster === "Other" && ` · ${breakdownKey === "expense" ? row.expense : row.master}`}
                       {row.billFile ? " · bill attached" : " · no bill"}
                     </p>
                   </div>
