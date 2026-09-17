@@ -5,6 +5,7 @@ import { previewImportSheet } from "/src/api/imports";
 import { fetchSheetsStatus, exportToGoogleSheet, previewFromGoogleSheet, emailExpenseSheet } from "/src/api/sheets";
 import { API_BASE_URL } from "/src/api/config";
 import { DEFAULT_EXPENSE_MASTERS } from "/src/constants/categories";
+import { FILE_PREFIX } from "/src/constants/brand";
 import { downloadCsv } from "/src/utils/exportCsv";
 import MasterAutocomplete from "/src/components/MasterAutocomplete";
 import AlertsStrip, { buildExpenseAlerts } from "/src/components/AlertsStrip";
@@ -351,7 +352,7 @@ const Expenses = () => {
       return;
     }
     downloadCsv(
-      `kushal-timbers-expenses-${todayStr()}.csv`,
+      `${FILE_PREFIX}-${todayStr()}.csv`,
       [
         { key: "date", label: "Date" },
         { key: "expense", label: "Expense" },

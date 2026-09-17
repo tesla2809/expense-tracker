@@ -1,76 +1,89 @@
-# Kushal Timbers — Expense Tracker
+# Expense Tracker
 
-A dedicated income & expense tracker for Kushal Timbers, built on a MERN stack
-(MongoDB, Express, React, Node).
+A private expense and vehicle-expense tracker for a small business. React
+frontend, Express backend, **Google Sheets as the database** — so the owner can
+open the raw data in a spreadsheet at any time without asking anyone.
 
 ## What's in here
 
-- `backend/` — Express + MongoDB API (auth, expenses, income, file uploads)
-- `frontend/` — React (Vite) dashboard
-- `docker-compose.yml`, `k8s/` — deployment configs (not required for local dev)
+- `backend/` — Express API (auth, expenses, vehicles, imports, file uploads, email)
+- `frontend/` — React + Vite + Tailwind dashboard
+- `scripts/seed-test-data.js` — fills a fresh account with realistic test data
 
 ## Features
 
-- Login/signup with hashed passwords (JWT-based sessions)
-- Expense and income tracking with categories tailored to a timber business
-  (raw timber purchase, transport & freight, labor wages, sawmill/machinery
-  maintenance, GST & taxes, timber sales, sawdust/byproduct sales, etc.),
-  plus an "Other" option with a free-text category when nothing fits
-- Party/vendor tracking on every entry (who you paid, or who paid you) —
-  useful for supplier and customer credit accounts
-- Payment mode (Cash / Bank Transfer / UPI / Cheque / Other)
-- Optional bill/invoice photo or PDF attached to any entry
-- Dashboard with category-wise breakdowns and recent-transactions view
-- All amounts shown in ₹ (INR)
+**Expense sheet**
+
+- Add, edit and delete entries; every row scoped to the logged-in account
+- Filter bar: date range, master, expense, with suggestions drawn from data
+  already entered — and Enter walks from field to field, so a full entry can be
+  made without touching the mouse
+- Multi-select masters, so several ledger heads can be compared at once
+- Import from a spreadsheet, with a preview step that flags likely duplicates
+- Bill/invoice photo or PDF attached to any entry
+- Export to CSV, or email the whole sheet as an .xlsx attachment
+- Reminders and suggestions surfaced on the sheet itself
+
+**Vehicle sheet**
+
+- One row per vehicle, with document expiry dates and reminders before they lapse
+- Fuel tracking by litres *and* odometer reading, giving both cost per litre and
+  km per litre
+- Flags a fill priced more than 15% above that vehicle's own average, and a leg
+  running more than 20% below its own average mileage — the two signatures of an
+  inflated bill or fuel going missing
+- Vehicle expenses entered on the main sheet are detected and tagged, so the same
+  spend never gets counted twice
+
+**Dashboard**
+
+- Category donut, monthly trend, top-masters bar — all honouring the filter bar
+- Click a master to open a drawer breaking that master down by its own expenses
+- Colour follows the entity, not its rank, so filtering never repaints the chart
+- Light and dark themes, each with its own contrast-checked palette
 
 ## Running it locally
 
-### 1. Backend
+### Backend
 
 ```bash
 cd backend
-cp .env.example .env   # then fill in MONGO_URI and JWT_SECRET
+cp .env.example .env      # then fill it in — the file explains each variable
 npm install
-npm run dev            # http://localhost:3000
+npm run dev               # http://localhost:3000
 ```
 
-`MONGO_URI` can point to a local MongoDB or a free MongoDB Atlas cluster.
-`JWT_SECRET` should be a long random string — used to sign login tokens.
+`.env.example` walks through the one-time setup for the Google Sheets service
+account, Cloudinary (permanent storage for uploaded bills) and email.
 
-Uploaded bills are stored under `backend/uploads/` and served at
-`/uploads/<filename>`.
-
-### 2. Frontend
+### Frontend
 
 ```bash
 cd frontend
 npm install
-npm run dev             # http://localhost:5173
+npm run dev               # http://localhost:5173
 ```
 
-Set `VITE_API_BASE_URL` in `frontend/.env` to your backend's `/api` URL
-(defaults to `http://localhost:3000/api` for local dev).
+Set `VITE_API_BASE_URL` in `frontend/.env` to the backend's `/api` URL.
 
-## Notes on this upgrade (Sept 2026)
+## Deployment
 
-This started as a generic personal expense tracker and was reworked into a
-dedicated tool for Kushal Timbers:
+Frontend on Vercel, backend on Render, database in Google Sheets, uploaded files
+in Cloudinary. Two things to know about the free tiers:
 
-- Fixed a security bug where passwords were stored and compared in plain
-  text — they're now hashed with bcrypt.
-- Expense/income routes now require a valid login token and always use the
-  logged-in user's identity server-side, instead of trusting a `userId`
-  sent by the client.
-- Added timber-business categories, party/vendor tracking, payment mode,
-  and bill/invoice file uploads, on both the API and the UI.
-- Rebranded the UI for Kushal Timbers and switched currency display to ₹.
+- **Render blocks outbound SMTP ports (25/465/587).** Gmail SMTP cannot connect
+  from the live server at all — it hangs. Email goes out over HTTPS via Brevo
+  instead; set `BREVO_API_KEY`. SMTP still works locally and is kept as a fallback.
+- **Render's disk is wiped on every redeploy and spin-down.** Uploaded bills must
+  go to Cloudinary or they will eventually vanish.
 
-It currently supports a single login. If Kushal Timbers' owner needs their
-own login later (e.g. to review reports without entering data), that would
-mean adding user roles — a bigger change than this round covered, but the
-data model (everything scoped by `user`) is a reasonable starting point for
-it.
+## Naming
 
-Deployment (Vercel for the frontend, Render/Railway for the backend) isn't
-set up yet — the app is currently meant to be run locally. Ask when you're
-ready to put it on a public URL and we can wire that up.
+The product name lives in exactly two files:
+
+- `frontend/src/constants/brand.js`
+- `backend/constants/brand.js`
+
+It is deliberately generic — nothing on screen, in an email subject, or in an
+exported filename identifies whose business this is. Change those two files to
+rename the whole app.

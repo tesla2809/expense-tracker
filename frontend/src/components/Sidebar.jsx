@@ -2,6 +2,7 @@ import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
+import { APP_NAME, APP_TAGLINE } from '../constants/brand';
 import {
   LogOut,
   LayoutDashboard,
@@ -46,9 +47,9 @@ const Sidebar = ({ isOpen = false, onClose = () => {} }) => {
           <div className="min-w-0">
             <h2 className="text-blue-600 dark:text-blue-400 font-bold text-lg flex items-center min-w-0">
               <PieChart className="mr-2 shrink-0" size={22} />
-              <span className="truncate">Kushal Timbers</span>
+              <span className="truncate">{APP_NAME}</span>
             </h2>
-            <p className="text-xs text-gray-400 dark:text-gray-500 mt-1 ml-8">Expense Tracker</p>
+            <p className="text-xs text-gray-400 dark:text-gray-500 mt-1 ml-8">{APP_TAGLINE}</p>
           </div>
           <button
             onClick={onClose}

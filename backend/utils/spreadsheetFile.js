@@ -1,4 +1,5 @@
 import * as XLSX from "xlsx";
+import { FILE_PREFIX } from "../constants/brand.js";
 
 // Builds a real .xlsx workbook in memory from expense rows, for emailing as
 // an attachment.
@@ -58,4 +59,4 @@ export const buildExpensesWorkbook = (expenses, vehiclesById = new Map()) => {
 };
 
 export const expensesFileName = () =>
-  `kushal-timbers-expenses-${new Date().toISOString().split("T")[0]}.xlsx`;
+  `${FILE_PREFIX}-${new Date().toISOString().split("T")[0]}.xlsx`;

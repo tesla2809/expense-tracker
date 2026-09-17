@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
+import { APP_NAME } from "../../constants/brand";
 import { ToastContainer, toast } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 
@@ -45,8 +46,8 @@ const Login = () => {
         className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-lg w-full max-w-sm"
       >
         <div className="text-center mb-4">
-          <p className="text-blue-600 dark:text-blue-400 font-bold text-lg">Kushal Timbers</p>
-          <h2 className="text-xl font-semibold text-gray-700 dark:text-gray-200">Expense Tracker Login</h2>
+          <p className="text-blue-600 dark:text-blue-400 font-bold text-lg">{APP_NAME}</p>
+          <h2 className="text-xl font-semibold text-gray-700 dark:text-gray-200">Sign in</h2>
         </div>
 
         <div className="mb-4">

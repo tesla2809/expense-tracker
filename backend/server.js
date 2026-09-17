@@ -72,7 +72,7 @@ app.use("/api/vehicles", vehicleRoutes);
 // its database are both healthy (open http://localhost:3000 directly to check).
 app.get("/", (req, res) => {
   res.status(200).json({
-    message: "Kushal Timbers Expense Tracker API is running...",
+    message: "Expense Tracker API is running...",
     database: isSheetsDbConfigured() ? "google-sheets-connected" : "google-sheets-not-configured",
   });
 });

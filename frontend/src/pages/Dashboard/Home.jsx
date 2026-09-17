@@ -17,6 +17,7 @@ import {
 } from "recharts";
 import { useAuth } from "/src/context/AuthContext";
 import { useTheme } from "/src/context/ThemeContext";
+import { APP_NAME, APP_TAGLINE } from "/src/constants/brand";
 import SuggestInput from "/src/components/SuggestInput";
 import MasterMultiSelect from "/src/components/MasterMultiSelect";
 import { FiFilter, FiXCircle, FiX, FiAlertTriangle } from "react-icons/fi";
@@ -317,10 +318,10 @@ const Home = () => {
     <div className="p-4 sm:p-6 lg:px-12 max-w-7xl mx-auto">
       <div className="mb-6">
         <h1 className="text-2xl font-semibold" style={{ color: INK.primary }}>
-          Kushal Timbers
+          {APP_NAME}
         </h1>
         <p className="text-sm" style={{ color: INK.muted }}>
-          Where the business's money is going
+          {APP_TAGLINE}
         </p>
       </div>
 

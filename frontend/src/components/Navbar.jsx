@@ -1,6 +1,7 @@
 import React from "react";
 import { Link } from "react-router-dom";
 import { Menu, PieChart } from "lucide-react";
+import { APP_NAME } from "../constants/brand";
 
 // onMenuClick opens the mobile/tablet sidebar drawer (owned by DashboardLayout).
 // The hamburger only renders below the lg breakpoint — on desktop the sidebar
@@ -22,7 +23,7 @@ const Navbar = ({ onMenuClick }) => {
             className="flex items-center min-w-0 text-blue-600 dark:text-blue-400 font-bold text-base sm:text-xl tracking-wide hover:text-blue-800 dark:hover:text-blue-300 transition-all"
           >
             <PieChart className="h-5 w-5 sm:h-6 sm:w-6 mr-2 shrink-0" />
-            <span className="truncate">Kushal Timbers</span>
+            <span className="truncate">{APP_NAME}</span>
           </Link>
         </div>
 

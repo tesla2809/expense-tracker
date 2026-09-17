@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
+import { APP_NAME } from '../../constants/brand';
 
 const Signup = () => {
   const [name, setName] = useState('');
@@ -44,7 +45,7 @@ const Signup = () => {
         className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-lg w-full max-w-sm"
       >
         <div className="text-center mb-4">
-          <p className="text-blue-600 dark:text-blue-400 font-bold text-lg">Kushal Timbers</p>
+          <p className="text-blue-600 dark:text-blue-400 font-bold text-lg">{APP_NAME}</p>
           <h2 className="text-xl font-semibold text-gray-700 dark:text-gray-200">Create Your Account</h2>
         </div>
 
