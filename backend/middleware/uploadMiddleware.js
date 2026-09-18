@@ -47,6 +47,18 @@ export const uploadVehicleDocs = multer({
   { name: "plateFile", maxCount: 1 },
 ]);
 
+// A contractor or a labor can each have up to 3 identity documents attached
+// (Aadhar, PAN, and a "green card" if they have one) — same file rules.
+export const uploadLabourDocs = multer({
+  storage,
+  fileFilter,
+  limits: { fileSize: MAX_FILE_SIZE_BYTES },
+}).fields([
+  { name: "aadharFile", maxCount: 1 },
+  { name: "panFile", maxCount: 1 },
+  { name: "greenCardFile", maxCount: 1 },
+]);
+
 // --- Spreadsheet import (expense/income sheet upload) ---
 // Kept in memory only (never written to disk) since we just parse it once
 // and discard it — the parsed rows are what gets saved, not the file itself.

@@ -12,6 +12,7 @@ import sheetsRoutes from "./routes/sheetsRoutes.js";
 import vehicleRoutes from "./routes/vehicleRoutes.js";
 import budgetRoutes from "./routes/budgetRoutes.js";
 import masterRoutes from "./routes/masterRoutes.js";
+import labourRoutes from "./routes/labourRoutes.js";
 import { UPLOADS_DIR } from "./middleware/uploadMiddleware.js";
 import { isSheetsDbConfigured } from "./utils/sheetsDb.js";
 import { ensureUsersSheet } from "./models/userStore.js";
@@ -19,6 +20,13 @@ import { ensureExpensesSheet } from "./models/expenseStore.js";
 import { ensureVehiclesSheet } from "./models/vehicleStore.js";
 import { ensureBudgetsSheet } from "./models/budgetStore.js";
 import { ensureMastersSheet } from "./models/masterStore.js";
+import {
+  ensureMillsSheet,
+  ensureContractorsSheet,
+  ensureLaborsSheet,
+  ensureWageEntriesSheet,
+  ensurePaymentsSheet,
+} from "./models/labourStore.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -72,6 +80,7 @@ app.use("/api/sheets", sheetsRoutes);
 app.use("/api/vehicles", vehicleRoutes);
 app.use("/api/budgets", budgetRoutes);
 app.use("/api/masters", masterRoutes);
+app.use("/api/labour", labourRoutes);
 
 // Root route — also reports whether the Google Sheets database is actually
 // configured, so a single visit to this URL tells you if the backend AND
@@ -107,8 +116,13 @@ app.listen(PORT, async () => {
         ensureVehiclesSheet(),
         ensureBudgetsSheet(),
         ensureMastersSheet(),
+        ensureMillsSheet(),
+        ensureContractorsSheet(),
+        ensureLaborsSheet(),
+        ensureWageEntriesSheet(),
+        ensurePaymentsSheet(),
       ]);
-      console.log("✅ Google Sheets database ready (Users + Expenses + Vehicles + Budgets + Masters tabs)");
+      console.log("✅ Google Sheets database ready (Users + Expenses + Vehicles + Budgets + Masters + Mills + Contractors + Labors + WageEntries + Payments tabs)");
     } catch (error) {
       console.error("❌ Couldn't prepare the Google Sheets database:", error.message);
     }

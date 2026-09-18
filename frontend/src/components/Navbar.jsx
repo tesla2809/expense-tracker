@@ -3,6 +3,12 @@ import { Link } from "react-router-dom";
 import { Menu, PieChart } from "lucide-react";
 import { APP_NAME } from "../constants/brand";
 
+// The top-right corner sat empty since this navbar was first built — this is
+// that "three horizontal lines" Rishi asked to finally add there. It opens a
+// separate, deliberately out-of-the-way page for managing master/reference
+// data (vehicles, mills, contractors, labor) so the day-to-day sheet pages
+// (Expenses, Labor Wages) can stay just a grid, not also an add/edit form.
+
 // onMenuClick opens the mobile/tablet sidebar drawer (owned by DashboardLayout).
 // The hamburger only renders below the lg breakpoint — on desktop the sidebar
 // is always visible so there's nothing to toggle.
@@ -27,6 +33,14 @@ const Navbar = ({ onMenuClick }) => {
           </Link>
         </div>
 
+        <Link
+          to="/dashboard/manage-data"
+          className="p-2 text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg transition-all shrink-0"
+          aria-label="Manage data"
+          title="Manage vehicles, mills, contractors & labor"
+        >
+          <Menu size={22} />
+        </Link>
       </div>
     </nav>
   );

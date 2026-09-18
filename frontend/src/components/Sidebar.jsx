@@ -9,6 +9,7 @@ import {
   Sheet,
   PieChart,
   Truck,
+  HardHat,
   X,
   Sun,
   Moon,
@@ -18,6 +19,7 @@ const NAV_ITEMS = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, end: true },
   { to: '/dashboard/expenses', label: 'Expense Sheet', icon: Sheet },
   { to: '/dashboard/vehicles', label: 'Vehicles', icon: Truck },
+  { to: '/dashboard/labor-wages', label: 'Labor Wages', icon: HardHat },
 ];
 
 // isOpen/onClose control the mobile/tablet off-canvas drawer only — on

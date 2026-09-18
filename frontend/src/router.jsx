@@ -14,6 +14,8 @@ import ResetPassword from './pages/Auth/ResetPassword';
 import Home from './pages/Dashboard/Home';
 import Expenses from './pages/Dashboard/Expenses';
 import Vehicles from './pages/Dashboard/Vehicles';
+import LaborWages from './pages/Dashboard/LaborWages';
+import ManageData from './pages/Dashboard/ManageData';
 
 // PrivateRoute component to protect routes
 import PrivateRoute from './components/PrivateRoute';
@@ -41,6 +43,8 @@ const AppRouter = () => {
             <Route index element={<Home />} />
             <Route path="expenses" element={<Expenses />} />
             <Route path="vehicles" element={<Vehicles />} />
+            <Route path="labor-wages" element={<LaborWages />} />
+            <Route path="manage-data" element={<ManageData />} />
           </Route>
         </Route>
 
