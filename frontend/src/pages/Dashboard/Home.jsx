@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { fetchExpenses } from "/src/api/expenses";
+import { fetchVehicles } from "/src/api/vehicles";
 import { fetchContractors, fetchWageEntries, fetchPayments } from "/src/api/labour";
 import {
   PieChart,
@@ -22,6 +23,19 @@ import { APP_NAME, APP_TAGLINE } from "/src/constants/brand";
 import SuggestInput from "/src/components/SuggestInput";
 import MasterMultiSelect from "/src/components/MasterMultiSelect";
 import { FiFilter, FiXCircle, FiX, FiAlertTriangle } from "react-icons/fi";
+
+// Dashboard tabs (18 Sep, per Rishi's correction: "i said pages in inside the
+// dashboard only just like what we did in labor page with work log, payments
+// and report") — Overview / Vehicles / Labor Wages live as tabs on the ONE
+// /dashboard route, same tab-bar pattern as LaborWages.jsx, not as separate
+// routed pages. An earlier pass built VehicleDashboard.jsx/LaborDashboard.jsx
+// as standalone routed pages; that was the wrong shape and has been undone
+// here (those two files are now unused — see status.md).
+const DASHBOARD_TABS = [
+  { key: "overview", label: "Overview" },
+  { key: "vehicles", label: "Vehicles" },
+  { key: "labor", label: "Labor Wages" },
+];
 
 // --- Palette -----------------------------------------------------------
 // Categorical slots, assigned in this fixed order and never cycled. Validated
@@ -75,16 +89,13 @@ const Home = () => {
   const seriesColors = SERIES_COLORS[isDark ? "dark" : "light"];
 
   const [expenses, setExpenses] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-
-  // Labor Wages summary — kept separate from the Expense-sheet totals above
-  // (wages aren't logged as Expense rows), so this never silently changes
-  // the existing "Total"/trend/master-breakdown numbers. Rishi flagged that
-  // wage entries and payments weren't showing up anywhere on the dashboard.
+  const [vehicles, setVehicles] = useState([]);
   const [laborContractors, setLaborContractors] = useState([]);
   const [laborWages, setLaborWages] = useState([]);
   const [laborPayments, setLaborPayments] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [tab, setTab] = useState("overview");
 
   // --- Filters (sir's item i: filters on everything, by master and by date) ---
   const [showFilters, setShowFilters] = useState(false);
@@ -142,15 +153,22 @@ const Home = () => {
       } finally {
         setLoading(false);
       }
-      // Best-effort — a Labor Wages fetch failing shouldn't block the rest
-      // of the dashboard from loading.
+
+      // Best-effort — the Vehicles/Labor Wages tabs failing to load shouldn't
+      // block the Overview tab, which is the main expense dashboard.
       try {
-        const [c, w, p] = await Promise.all([fetchContractors(), fetchWageEntries(), fetchPayments()]);
+        const [v, c, w, p] = await Promise.all([
+          fetchVehicles(),
+          fetchContractors(),
+          fetchWageEntries(),
+          fetchPayments(),
+        ]);
+        setVehicles(Array.isArray(v) ? v : []);
         setLaborContractors(Array.isArray(c) ? c : []);
         setLaborWages(Array.isArray(w) ? w : []);
         setLaborPayments(Array.isArray(p) ? p : []);
       } catch (err) {
-        console.error("Error loading labor wages data:", err);
+        console.error("Error loading vehicle/labor data:", err);
       }
     };
     loadData();
@@ -301,23 +319,29 @@ const Home = () => {
 
   const recentExpenses = useMemo(() => filtered.slice(0, 8), [filtered]);
 
-  // --- Labor Wages summary --------------------------------------------------
-  // Same balance formula as the Labor Wages page's Report tab (opening +
-  // earned - paid), just totalled across every contractor instead of shown
-  // one at a time.
+  // --- Vehicles tab -------------------------------------------------------
+  const vehicleExpenses = useMemo(() => expenses.filter((e) => e.vehicleId), [expenses]);
+  const vehicleTotals = useMemo(() => {
+    const totalSpend = vehicleExpenses.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+    return { totalSpend, vehicleCount: vehicles.length, entryCount: vehicleExpenses.length };
+  }, [vehicles, vehicleExpenses]);
+  const vehicleBySpend = useMemo(() => {
+    return vehicles
+      .map((v) => ({
+        name: v.name,
+        spend: vehicleExpenses.filter((e) => e.vehicleId === v._id).reduce((s, e) => s + (Number(e.amount) || 0), 0),
+      }))
+      .filter((v) => v.spend > 0)
+      .sort((a, b) => b.spend - a.spend);
+  }, [vehicles, vehicleExpenses]);
+
+  // --- Labor Wages tab ------------------------------------------------------
   const laborTotals = useMemo(() => {
     const totalEarned = laborWages.reduce((s, w) => s + (Number(w.amount) || 0), 0);
     const totalPaid = laborPayments.reduce((s, p) => s + (Number(p.amount) || 0), 0);
     const totalOpening = laborContractors.reduce((s, c) => s + (Number(c.openingBalance) || 0), 0);
-    const pending = totalOpening + totalEarned - totalPaid;
-    return { totalEarned, totalPaid, pending };
+    return { totalEarned, totalPaid, pending: totalOpening + totalEarned - totalPaid };
   }, [laborContractors, laborWages, laborPayments]);
-
-  // Earned vs Paid per contractor — the dateLabel/date fields on wage
-  // entries and payments are free-text ("22-06 TO 27-06", "21-Jun"), not
-  // real dates, so a month-by-month trend line (like Monthly Spend above)
-  // can't be built reliably. A per-contractor comparison needs no date
-  // parsing and directly shows the same gap the Report tab's cards do.
   const laborByContractor = useMemo(() => {
     return laborContractors
       .map((c) => ({
@@ -371,6 +395,24 @@ const Home = () => {
         </p>
       </div>
 
+      <div className="flex gap-1 border-b border-gray-200 dark:border-gray-700 mb-6">
+        {DASHBOARD_TABS.map((t) => (
+          <button
+            key={t.key}
+            onClick={() => setTab(t.key)}
+            className={`px-3 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+              tab === t.key
+                ? "border-red-500 text-red-600 dark:text-red-400"
+                : "border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "overview" && (
+        <>
       {/* Filters — one row above everything, applying to every card and chart */}
       <div className="flex flex-col sm:flex-row gap-3 mb-6">
         <button
@@ -506,87 +548,6 @@ const Home = () => {
           </p>
         </Card>
       </div>
-
-      {/* Labor Wages summary — separate from the Expense-sheet total above,
-          since wages aren't logged as Expense rows. */}
-      {(laborWages.length > 0 || laborPayments.length > 0) && (
-        <Card className="mb-6">
-          <div className="px-5 py-4 border-b border-gray-100 dark:border-gray-700">
-            <h2 className="font-semibold" style={{ color: INK.primary }}>
-              Labor Wages
-            </h2>
-            <p className="text-xs mt-0.5" style={{ color: INK.muted }}>
-              Across all contractors — full detail on the Labor Wages page
-            </p>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-3 divide-y sm:divide-y-0 sm:divide-x divide-gray-100 dark:divide-gray-700">
-            <div className="p-5">
-              <h3 className="text-xs font-medium uppercase tracking-wide mb-2" style={{ color: INK.muted }}>
-                Total Earned (CFT)
-              </h3>
-              <p className="text-2xl font-semibold" style={{ color: INK.primary }}>
-                {formatCurrency(laborTotals.totalEarned)}
-              </p>
-            </div>
-            <div className="p-5">
-              <h3 className="text-xs font-medium uppercase tracking-wide mb-2" style={{ color: INK.muted }}>
-                Total Paid
-              </h3>
-              <p className="text-2xl font-semibold" style={{ color: INK.primary }}>
-                {formatCurrency(laborTotals.totalPaid)}
-              </p>
-            </div>
-            <div className="p-5">
-              <h3 className="text-xs font-medium uppercase tracking-wide mb-2" style={{ color: INK.muted }}>
-                {laborTotals.pending < 0 ? "Owed Back" : "Pending"}
-              </h3>
-              <p
-                className="text-2xl font-semibold"
-                style={{ color: laborTotals.pending > 0 ? STATUS.warning : laborTotals.pending < 0 ? STATUS.critical : INK.primary }}
-              >
-                {formatCurrency(Math.abs(laborTotals.pending))}
-              </p>
-            </div>
-          </div>
-
-          {laborByContractor.length > 0 && (
-            <div className="px-4 pb-4 pt-2 border-t border-gray-100 dark:border-gray-700 h-72">
-              <p className="text-xs px-1 pt-3 pb-1" style={{ color: INK.muted }}>
-                Earned vs Paid, by contractor
-              </p>
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={laborByContractor} margin={{ top: 8, right: 8, left: 0, bottom: 8 }} barGap={2}>
-                  <CartesianGrid stroke={INK.grid} vertical={false} />
-                  <XAxis
-                    dataKey="name"
-                    tick={{ fontSize: 12, fill: INK.muted }}
-                    axisLine={{ stroke: INK.axis }}
-                    tickLine={false}
-                  />
-                  <YAxis
-                    tickFormatter={(v) => `₹${v >= 100000 ? `${(v / 100000).toFixed(1)}L` : v >= 1000 ? `${Math.round(v / 1000)}k` : v}`}
-                    tick={{ fontSize: 12, fill: INK.muted }}
-                    axisLine={false}
-                    tickLine={false}
-                    width={52}
-                  />
-                  <Tooltip
-                    formatter={(v) => formatCurrency(v)}
-                    contentStyle={tooltipStyle}
-                    cursor={{ fill: isDark ? "rgba(255,255,255,0.05)" : "rgba(11,11,11,0.04)" }}
-                  />
-                  <Legend
-                    wrapperStyle={{ fontSize: 12 }}
-                    formatter={(value) => <span style={{ color: INK.secondary }}>{value}</span>}
-                  />
-                  <Bar dataKey="earned" name="Earned" fill={seriesColors[1]} radius={[4, 4, 0, 0]} maxBarSize={40} />
-                  <Bar dataKey="paid" name="Paid" fill={seriesColors[2]} radius={[4, 4, 0, 0]} maxBarSize={40} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          )}
-        </Card>
-      )}
 
       {/* Monthly trend */}
       <Card className="mb-6">
@@ -867,6 +828,110 @@ const Home = () => {
             </div>
           </div>
         </div>
+      )}
+        </>
+      )}
+
+      {tab === "vehicles" && (
+        vehicles.length === 0 ? (
+          <Card className="p-8 text-center text-sm" style={{ color: INK.muted }}>
+            No vehicles yet — add one from the Vehicles page.
+          </Card>
+        ) : (
+          <>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+              <Card className="p-5">
+                <h3 className="text-xs font-medium uppercase tracking-wide mb-2" style={{ color: INK.muted }}>Total Spend</h3>
+                <p className="text-3xl font-semibold" style={{ color: INK.primary }}>{formatCurrency(vehicleTotals.totalSpend)}</p>
+              </Card>
+              <Card className="p-5">
+                <h3 className="text-xs font-medium uppercase tracking-wide mb-2" style={{ color: INK.muted }}>Vehicles</h3>
+                <p className="text-3xl font-semibold" style={{ color: INK.primary }}>{vehicleTotals.vehicleCount}</p>
+              </Card>
+              <Card className="p-5">
+                <h3 className="text-xs font-medium uppercase tracking-wide mb-2" style={{ color: INK.muted }}>Logged Entries</h3>
+                <p className="text-3xl font-semibold" style={{ color: INK.primary }}>{vehicleTotals.entryCount}</p>
+              </Card>
+            </div>
+
+            {vehicleBySpend.length > 0 && (
+              <Card className="p-4 h-96">
+                <p className="text-sm font-semibold px-1 pb-2" style={{ color: INK.primary }}>Spend by vehicle</p>
+                <ResponsiveContainer width="100%" height="90%">
+                  <BarChart data={vehicleBySpend} margin={{ top: 8, right: 8, left: 0, bottom: 8 }} barGap={2}>
+                    <CartesianGrid stroke={INK.grid} vertical={false} />
+                    <XAxis dataKey="name" tick={{ fontSize: 12, fill: INK.muted }} axisLine={{ stroke: INK.axis }} tickLine={false} />
+                    <YAxis
+                      tickFormatter={(v) => `₹${v >= 100000 ? `${(v / 100000).toFixed(1)}L` : v >= 1000 ? `${Math.round(v / 1000)}k` : v}`}
+                      tick={{ fontSize: 12, fill: INK.muted }}
+                      axisLine={false}
+                      tickLine={false}
+                      width={52}
+                    />
+                    <Tooltip formatter={(v) => formatCurrency(v)} contentStyle={tooltipStyle} cursor={{ fill: isDark ? "rgba(255,255,255,0.05)" : "rgba(11,11,11,0.04)" }} />
+                    <Legend wrapperStyle={{ fontSize: 12 }} formatter={(value) => <span style={{ color: INK.secondary }}>{value}</span>} />
+                    <Bar dataKey="spend" name="Spend" fill={seriesColors[0]} radius={[4, 4, 0, 0]} maxBarSize={40} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </Card>
+            )}
+          </>
+        )
+      )}
+
+      {tab === "labor" && (
+        laborContractors.length === 0 ? (
+          <Card className="p-8 text-center text-sm" style={{ color: INK.muted }}>
+            No contractors yet — add one from the menu icon on the Labor Wages page.
+          </Card>
+        ) : (
+          <>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+              <Card className="p-5">
+                <h3 className="text-xs font-medium uppercase tracking-wide mb-2" style={{ color: INK.muted }}>Total Earned (CFT)</h3>
+                <p className="text-3xl font-semibold" style={{ color: INK.primary }}>{formatCurrency(laborTotals.totalEarned)}</p>
+              </Card>
+              <Card className="p-5">
+                <h3 className="text-xs font-medium uppercase tracking-wide mb-2" style={{ color: INK.muted }}>Total Paid</h3>
+                <p className="text-3xl font-semibold" style={{ color: INK.primary }}>{formatCurrency(laborTotals.totalPaid)}</p>
+              </Card>
+              <Card className="p-5">
+                <h3 className="text-xs font-medium uppercase tracking-wide mb-2" style={{ color: INK.muted }}>
+                  {laborTotals.pending < 0 ? "Owed Back" : "Pending"}
+                </h3>
+                <p
+                  className="text-3xl font-semibold"
+                  style={{ color: laborTotals.pending > 0 ? STATUS.warning : laborTotals.pending < 0 ? STATUS.critical : INK.primary }}
+                >
+                  {formatCurrency(Math.abs(laborTotals.pending))}
+                </p>
+              </Card>
+            </div>
+
+            {laborByContractor.length > 0 && (
+              <Card className="p-4 h-96">
+                <p className="text-sm font-semibold px-1 pb-2" style={{ color: INK.primary }}>Earned vs Paid, by contractor</p>
+                <ResponsiveContainer width="100%" height="90%">
+                  <BarChart data={laborByContractor} margin={{ top: 8, right: 8, left: 0, bottom: 8 }} barGap={2}>
+                    <CartesianGrid stroke={INK.grid} vertical={false} />
+                    <XAxis dataKey="name" tick={{ fontSize: 12, fill: INK.muted }} axisLine={{ stroke: INK.axis }} tickLine={false} />
+                    <YAxis
+                      tickFormatter={(v) => `₹${v >= 100000 ? `${(v / 100000).toFixed(1)}L` : v >= 1000 ? `${Math.round(v / 1000)}k` : v}`}
+                      tick={{ fontSize: 12, fill: INK.muted }}
+                      axisLine={false}
+                      tickLine={false}
+                      width={52}
+                    />
+                    <Tooltip formatter={(v) => formatCurrency(v)} contentStyle={tooltipStyle} cursor={{ fill: isDark ? "rgba(255,255,255,0.05)" : "rgba(11,11,11,0.04)" }} />
+                    <Legend wrapperStyle={{ fontSize: 12 }} formatter={(value) => <span style={{ color: INK.secondary }}>{value}</span>} />
+                    <Bar dataKey="earned" name="Earned" fill={seriesColors[1]} radius={[4, 4, 0, 0]} maxBarSize={40} />
+                    <Bar dataKey="paid" name="Paid" fill={seriesColors[2]} radius={[4, 4, 0, 0]} maxBarSize={40} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </Card>
+            )}
+          </>
+        )
       )}
     </div>
   );

@@ -211,11 +211,6 @@ const Expenses = () => {
   // the sheet showing the old one.
   const reloadAfterMasterChange = () => loadData();
 
-  const total = useMemo(() => rows.reduce((sum, r) => sum + (Number(r.amount) || 0), 0), [rows]);
-
-  // Deliberately built from every row rather than the filtered view — these
-  // are standing reminders about the business, not a readout of the current
-  // filter.
   // Budgets are fetched here purely to power the over-budget reminders; a
   // failure is non-fatal, the sheet just shows one fewer alert.
   const [budgets, setBudgets] = useState([]);
@@ -249,6 +244,11 @@ const Expenses = () => {
       return true;
     });
   }, [rows, search, filterExpense, filterMasters, filterDateFrom, filterDateTo]);
+
+  // Was computed from the raw `rows` before — never moved when a master/
+  // date/search filter was applied, even though the filtering logic above
+  // already existed. Fixed 18 Sep per Rishi's report.
+  const total = useMemo(() => filteredRows.reduce((sum, r) => sum + (Number(r.amount) || 0), 0), [filteredRows]);
 
   const groupedRows = useMemo(() => {
     if (groupBy === "none") return null;

@@ -60,3 +60,73 @@ export const buildExpensesWorkbook = (expenses, vehiclesById = new Map()) => {
 
 export const expensesFileName = () =>
   `${FILE_PREFIX}-${new Date().toISOString().split("T")[0]}.xlsx`;
+
+// Same idea as buildExpensesWorkbook, for the Labor Wages ledgers (Work Log /
+// Payments) — each is its own small workbook rather than trying to force
+// them into the expense sheet's columns.
+const WORK_LOG_COLUMNS = [
+  { header: "Contractor", width: 22 },
+  { header: "Date", width: 20 },
+  { header: "CFT", width: 10 },
+  { header: "Rate", width: 10 },
+  { header: "Amount (INR)", width: 14 },
+];
+
+const PAYMENT_COLUMNS = [
+  { header: "Contractor", width: 22 },
+  { header: "Date", width: 14 },
+  { header: "Label", width: 18 },
+  { header: "Amount (INR)", width: 14 },
+];
+
+// contractorsById maps a contractorId to its record, so the sheet shows the
+// contractor's name rather than a UUID.
+export const buildWorkLogWorkbook = (wageEntries, contractorsById = new Map()) => {
+  const rows = wageEntries.map((w) => [
+    contractorsById.get(w.contractorId)?.name || "",
+    w.dateLabel || "",
+    Number(w.cft) || 0,
+    Number(w.rate) || 0,
+    Number(w.amount) || 0,
+  ]);
+  const total = rows.reduce((sum, r) => sum + (Number(r[4]) || 0), 0);
+
+  const sheet = XLSX.utils.aoa_to_sheet([
+    WORK_LOG_COLUMNS.map((c) => c.header),
+    ...rows,
+    [],
+    ["", "", "", "TOTAL", total],
+  ]);
+  sheet["!cols"] = WORK_LOG_COLUMNS.map((c) => ({ wch: c.width }));
+  sheet["!freeze"] = { xSplit: "0", ySplit: "1" };
+
+  const book = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(book, sheet, "Work Log");
+  return XLSX.write(book, { type: "buffer", bookType: "xlsx" });
+};
+
+export const buildPaymentsWorkbook = (payments, contractorsById = new Map()) => {
+  const rows = payments.map((p) => [
+    contractorsById.get(p.contractorId)?.name || "",
+    p.date || "",
+    p.label || "",
+    Number(p.amount) || 0,
+  ]);
+  const total = rows.reduce((sum, r) => sum + (Number(r[3]) || 0), 0);
+
+  const sheet = XLSX.utils.aoa_to_sheet([
+    PAYMENT_COLUMNS.map((c) => c.header),
+    ...rows,
+    [],
+    ["", "", "TOTAL", total],
+  ]);
+  sheet["!cols"] = PAYMENT_COLUMNS.map((c) => ({ wch: c.width }));
+  sheet["!freeze"] = { xSplit: "0", ySplit: "1" };
+
+  const book = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(book, sheet, "Payments");
+  return XLSX.write(book, { type: "buffer", bookType: "xlsx" });
+};
+
+export const labourFileName = (type) =>
+  `${FILE_PREFIX}-${type === "payments" ? "payments" : "work-log"}-${new Date().toISOString().split("T")[0]}.xlsx`;

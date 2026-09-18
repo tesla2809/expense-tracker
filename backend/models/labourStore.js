@@ -1,19 +1,23 @@
-// Labor Wages — the whole tree: Location (fixed list, frontend-only) ->
-// Mills (addable/editable per location) -> Contractors (under a mill) ->
-// Labor (under a contractor). Plus, per contractor, the wage ledger sir's
-// paper sheet uses: a CFT work log and a payments/advances log.
+// Labor Wages — the whole tree: Location (its own store now, see
+// locationStore.js) -> Mills (addable/editable per location) -> Contractors
+// (under a mill) -> Labor (under a contractor). Plus, per contractor, the
+// wage ledger sir's paper sheet uses: a CFT work log and a payments/advances
+// log.
 //
 // Sir's notebook (18 Sep, second round): "Adoption with period here for
 // adding more mills" -> Mills are their own addable list, same as
-// Contractors/Labor. Locations (KTPL I, KTPL II, Rolling, Automatic) are
-// NOT in this store — they're a fixed frontend constant (see
-// LOCATIONS in LaborWages.jsx); nothing in sir's notes suggested those
-// four need to be added/renamed, only the mills under them.
+// Contractors/Labor. Locations used to be a fixed frontend constant here —
+// 18 Sep (third round), per Rishi: "we gonna add more [locations] in near
+// future", so they moved into their own per-user store (locationStore.js).
+// A Mill's `location` field stays a plain NAME string (not a locationId) to
+// keep every already-saved mill working without a migration this sandbox
+// can't run against Rishi's live sheet — see renameLocationOnMills below for
+// how a rename still reaches mills that reference the old name.
 //
-// All five entities share the same generic CRUD shape (see makeStore),
-// which just needs each sheet's headers and a row->entity mapper.
+// All five entities in THIS file share the same generic CRUD shape (see
+// makeStore), which just needs each sheet's headers and a row->entity mapper.
 import crypto from "crypto";
-import { ensureSheetTab, getAllRows, appendRow, updateRowAt, deleteRowAt } from "../utils/sheetsDb.js";
+import { ensureSheetTab, getAllRows, appendRow, appendRows, updateRowAt, updateRowsAt, deleteRowAt, deleteRowsAt } from "../utils/sheetsDb.js";
 
 const SHEETS = {
   mills: "Mills",
@@ -129,6 +133,22 @@ const makeStore = (sheetKey, toEntity) => {
     return toEntity(row);
   };
 
+  // Same idea as expenseStore's bulkCreateExpenses — used by the Labor Wages
+  // Work Log / Payments import (one appendRows call instead of N appendRow
+  // calls). Same generic shape as create() above, just batched.
+  const bulkCreate = async (userId, rowsFields) => {
+    const now = new Date().toISOString();
+    const prepared = rowsFields.map((fields) => ({
+      id: crypto.randomUUID(),
+      userId,
+      createdAt: now,
+      updatedAt: now,
+      ...Object.fromEntries(dataFields.map((f) => [f, fields[f] ?? ""])),
+    }));
+    await appendRows(SHEET, cols, prepared);
+    return prepared.map(toEntity);
+  };
+
   const findOwnedRow = async (id, userId) => {
     const rows = await getAllRows(SHEET, cols);
     const row = rows.find((r) => r.id === id);
@@ -152,7 +172,32 @@ const makeStore = (sheetKey, toEntity) => {
     return { entity: toEntity(row) };
   };
 
-  return { listByUser, create, updateById, deleteById };
+  // Deletes many rows at once — same idea and same reasoning as
+  // expenseStore's deleteExpensesByIds: one sheet read, one batched delete,
+  // however many rows are selected, with anything not owned by this user (or
+  // already gone) reported back instead of failing the whole request.
+  const bulkDeleteByIds = async (ids, userId) => {
+    const rows = await getAllRows(SHEET, cols);
+    const byId = new Map(rows.map((r) => [r.id, r]));
+
+    const mine = [];
+    const notFound = [];
+    const forbidden = [];
+    for (const id of new Set(ids)) {
+      const row = byId.get(id);
+      if (!row) notFound.push(id);
+      else if (row.userId !== userId) forbidden.push(id);
+      else mine.push(row);
+    }
+
+    if (mine.length) {
+      await deleteRowsAt(SHEET, mine.map((r) => r._row));
+    }
+
+    return { deleted: mine.map(toEntity), notFound, forbidden };
+  };
+
+  return { listByUser, create, bulkCreate, updateById, deleteById, bulkDeleteByIds };
 };
 
 // Contractors/labor also sort alphabetically by name for display — the
@@ -171,6 +216,30 @@ export const createMill = millStore.create;
 export const updateMillById = millStore.updateById;
 export const deleteMillById = millStore.deleteById;
 
+// Mills reference a location by NAME (see the file header comment), so
+// renaming a location has to reach every mill using the old name too —
+// otherwise a rename would silently orphan them, same bug class the master
+// rename cascade (renameMasterOnExpenses) already guards against. Deleting a
+// location that's still in use is blocked at the controller level instead,
+// using countMillsUsingLocation below.
+export const renameLocationOnMills = async (userId, oldName, newName) => {
+  const rows = await getAllRows(SHEETS.mills, HEADERS.mills);
+  const wanted = (oldName || "").trim().toLowerCase();
+  const now = new Date().toISOString();
+  const updates = rows
+    .filter((r) => r.userId === userId && (r.location || "").trim().toLowerCase() === wanted)
+    .map((r) => ({ rowNumber: r._row, rowObject: { ...r, location: newName, updatedAt: now } }));
+
+  if (updates.length) await updateRowsAt(SHEETS.mills, HEADERS.mills, updates);
+  return updates.length;
+};
+
+export const countMillsUsingLocation = async (userId, name) => {
+  const rows = await getAllRows(SHEETS.mills, HEADERS.mills);
+  const wanted = (name || "").trim().toLowerCase();
+  return rows.filter((r) => r.userId === userId && (r.location || "").trim().toLowerCase() === wanted).length;
+};
+
 export const listContractorsByUser = (userId) => contractorStore.listByUser(userId).then(alpha);
 export const createContractor = contractorStore.create;
 export const updateContractorById = contractorStore.updateById;
@@ -183,10 +252,14 @@ export const deleteLaborById = laborStore.deleteById;
 
 export const listWageEntriesByUser = wageEntryStore.listByUser;
 export const createWageEntry = wageEntryStore.create;
+export const bulkCreateWageEntries = wageEntryStore.bulkCreate;
 export const updateWageEntryById = wageEntryStore.updateById;
 export const deleteWageEntryById = wageEntryStore.deleteById;
+export const bulkDeleteWageEntries = wageEntryStore.bulkDeleteByIds;
 
 export const listPaymentsByUser = paymentStore.listByUser;
 export const createPayment = paymentStore.create;
+export const bulkCreatePayments = paymentStore.bulkCreate;
 export const updatePaymentById = paymentStore.updateById;
 export const deletePaymentById = paymentStore.deleteById;
+export const bulkDeletePayments = paymentStore.bulkDeleteByIds;

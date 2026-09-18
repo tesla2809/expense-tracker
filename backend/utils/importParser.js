@@ -158,7 +158,7 @@ const parseDate = (raw) => {
 // A minimal CSV parser (handles quoted fields with embedded commas/newlines)
 // used instead of XLSX's own CSV reader, which auto-guesses date formats
 // (usually assuming US MM-DD-YYYY) and mis-reads Indian DD-MM-YYYY dates.
-const parseCsvToRows = (text) => {
+export const parseCsvToRows = (text) => {
   const table = [];
   let row = [];
   let field = "";

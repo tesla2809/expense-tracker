@@ -88,11 +88,17 @@ const jsonCrud = (base, label) => ({
   },
 });
 
+const locations = jsonCrud("/labour/locations", "location");
 const mills = jsonCrud("/labour/mills", "mill");
 const contractors = crud("/labour/contractors", "contractor");
 const labors = crud("/labour/labors", "labor");
 const wageEntries = jsonCrud("/labour/wage-entries", "wage entry");
 const payments = jsonCrud("/labour/payments", "payment");
+
+export const fetchLocations = locations.fetch;
+export const addLocation = locations.add;
+export const updateLocation = locations.update;
+export const deleteLocation = locations.remove;
 
 export const fetchMills = mills.fetch;
 export const addMill = mills.add;
@@ -118,3 +124,43 @@ export const fetchPayments = payments.fetch;
 export const addPayment = payments.add;
 export const updatePayment = payments.update;
 export const deletePayment = payments.remove;
+
+// Bulk add — used by the Work Log / Payments importer once rows are reviewed.
+export const bulkAddWageEntries = async (rows) => {
+  try {
+    const res = await apiClient.post("/labour/wage-entries/bulk", { rows });
+    return res.data;
+  } catch (error) {
+    throw new Error(error.response?.data?.message || "Failed to add wage entries.");
+  }
+};
+
+export const bulkAddPayments = async (rows) => {
+  try {
+    const res = await apiClient.post("/labour/payments/bulk", { rows });
+    return res.data;
+  } catch (error) {
+    throw new Error(error.response?.data?.message || "Failed to add payments.");
+  }
+};
+
+// Bulk delete — one request for a whole selection, matching the "select
+// rows, delete selected" feature the Expense Sheet already had (18 Sep, per
+// Rishi: "add multi deletation in vehicle and labor wages page").
+export const bulkDeleteWageEntries = async (ids) => {
+  try {
+    const res = await apiClient.post("/labour/wage-entries/bulk-delete", { ids });
+    return res.data;
+  } catch (error) {
+    throw new Error(error.response?.data?.message || "Failed to delete those entries.");
+  }
+};
+
+export const bulkDeletePayments = async (ids) => {
+  try {
+    const res = await apiClient.post("/labour/payments/bulk-delete", { ids });
+    return res.data;
+  } catch (error) {
+    throw new Error(error.response?.data?.message || "Failed to delete those payments.");
+  }
+};

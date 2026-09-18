@@ -17,19 +17,23 @@ const looksLikeEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value
 // Google Sheet and share it": service accounts on free Google accounts have
 // zero Drive storage quota, so the app cannot create a Sheet at all. An
 // emailed file needs no sharing setup and works for any address.
+// scope: "vehicles" narrows to only vehicle-tagged expenses (Vehicles.jsx's
+// Vehicle Expense Sheet); anything else (undefined, "all") keeps Expenses.jsx's
+// existing behaviour unchanged.
 export const emailSheet = async (req, res) => {
-  const { email, note } = req.body;
+  const { email, note, scope } = req.body;
   if (!looksLikeEmail(email)) {
     return res.status(400).json({ message: "Enter a valid email address" });
   }
 
   try {
-    const [expenses, vehicles] = await Promise.all([
+    const [allExpenses, vehicles] = await Promise.all([
       listExpensesByUser(req.user.id),
       listVehiclesByUser(req.user.id).catch(() => []),
     ]);
+    const expenses = scope === "vehicles" ? allExpenses.filter((e) => e.vehicleId) : allExpenses;
     if (expenses.length === 0) {
-      return res.status(400).json({ message: "There are no expenses to send yet" });
+      return res.status(400).json({ message: scope === "vehicles" ? "There are no vehicle expenses to send yet" : "There are no expenses to send yet" });
     }
 
     const ordered = [...expenses].sort((a, b) => new Date(a.date) - new Date(b.date));
@@ -44,6 +48,7 @@ export const emailSheet = async (req, res) => {
       count: ordered.length,
       total,
       note,
+      scopeLabel: scope === "vehicles" ? "vehicle expense sheet" : "expense sheet",
     });
 
     res.json({
@@ -62,13 +67,16 @@ export const emailSheet = async (req, res) => {
 // separate from the app's own database sheet (GOOGLE_SHEET_ID) — this is a
 // "share/back up a copy to any Sheet you like" feature.
 export const exportToSheet = async (req, res) => {
-  const { sheetUrl } = req.body;
+  const { sheetUrl, scope } = req.body;
   if (!sheetUrl || !sheetUrl.trim()) {
     return res.status(400).json({ message: "Paste the Google Sheet's link or ID first" });
   }
 
   try {
-    const expenses = (await listExpensesByUser(req.user.id)).sort((a, b) => new Date(a.date) - new Date(b.date));
+    const allExpenses = await listExpensesByUser(req.user.id);
+    const expenses = (scope === "vehicles" ? allExpenses.filter((e) => e.vehicleId) : allExpenses).sort(
+      (a, b) => new Date(a.date) - new Date(b.date)
+    );
     await exportExpensesToSheet(sheetUrl, expenses);
     res.json({ message: `Exported ${expenses.length} expense${expenses.length === 1 ? "" : "s"} to the Google Sheet`, count: expenses.length });
   } catch (error) {

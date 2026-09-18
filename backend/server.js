@@ -13,6 +13,7 @@ import vehicleRoutes from "./routes/vehicleRoutes.js";
 import budgetRoutes from "./routes/budgetRoutes.js";
 import masterRoutes from "./routes/masterRoutes.js";
 import labourRoutes from "./routes/labourRoutes.js";
+import labourSheetsRoutes from "./routes/labourSheetsRoutes.js";
 import { UPLOADS_DIR } from "./middleware/uploadMiddleware.js";
 import { isSheetsDbConfigured } from "./utils/sheetsDb.js";
 import { ensureUsersSheet } from "./models/userStore.js";
@@ -27,6 +28,7 @@ import {
   ensureWageEntriesSheet,
   ensurePaymentsSheet,
 } from "./models/labourStore.js";
+import { ensureLocationsSheet } from "./models/locationStore.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -81,6 +83,7 @@ app.use("/api/vehicles", vehicleRoutes);
 app.use("/api/budgets", budgetRoutes);
 app.use("/api/masters", masterRoutes);
 app.use("/api/labour", labourRoutes);
+app.use("/api/labour-sheets", labourSheetsRoutes);
 
 // Root route — also reports whether the Google Sheets database is actually
 // configured, so a single visit to this URL tells you if the backend AND
@@ -121,6 +124,7 @@ app.listen(PORT, async () => {
         ensureLaborsSheet(),
         ensureWageEntriesSheet(),
         ensurePaymentsSheet(),
+        ensureLocationsSheet(),
       ]);
       console.log("✅ Google Sheets database ready (Users + Expenses + Vehicles + Budgets + Masters + Mills + Contractors + Labors + WageEntries + Payments tabs)");
     } catch (error) {

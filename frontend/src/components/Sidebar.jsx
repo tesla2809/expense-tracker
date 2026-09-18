@@ -15,6 +15,9 @@ import {
   Moon,
 } from 'lucide-react';
 
+// Vehicle/Labor analytics live as TABS on the Dashboard page itself (18 Sep),
+// not as separate nav entries — same as Labor Wages' own Work Log/Payments/
+// Report tabs don't get their own sidebar rows either.
 const NAV_ITEMS = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, end: true },
   { to: '/dashboard/expenses', label: 'Expense Sheet', icon: Sheet },

@@ -152,7 +152,9 @@ export const sendPasswordResetEmail = async (toEmail, resetUrl) =>
     `,
   });
 
-export const sendExpenseSheetEmail = async ({ toEmail, fileName, buffer, count, total, note }) => {
+// scopeLabel defaults to "expense sheet" so Expenses.jsx's existing calls are
+// unchanged; Vehicles.jsx passes "vehicle expense sheet".
+export const sendExpenseSheetEmail = async ({ toEmail, fileName, buffer, count, total, note, scopeLabel = "expense sheet" }) => {
   const money = new Intl.NumberFormat("en-IN", {
     style: "currency",
     currency: "INR",
@@ -161,9 +163,36 @@ export const sendExpenseSheetEmail = async ({ toEmail, fileName, buffer, count, 
 
   return send({
     to: toEmail,
-    subject: `Expense sheet — ${new Date().toLocaleDateString("en-IN")}`,
+    subject: `${scopeLabel[0].toUpperCase()}${scopeLabel.slice(1)} — ${new Date().toLocaleDateString("en-IN")}`,
     html: `
-      <p>Here is the current expense sheet.</p>
+      <p>Here is the current ${scopeLabel}.</p>
+      <p><strong>${count}</strong> ${count === 1 ? "entry" : "entries"}, totalling <strong>${money}</strong>.</p>
+      ${note ? `<p style="white-space:pre-wrap">${note}</p>` : ""}
+      <p style="color:#666;font-size:13px">
+        The attached file opens in Excel, or in Google Sheets — from Gmail, click the attachment
+        and choose "Open with Google Sheets".
+      </p>
+    `,
+    attachment: { name: fileName, content: buffer.toString("base64") },
+  });
+};
+
+// Labor Wages equivalent — Work Log has no meaningful single "total" the way
+// expenses/payments do (it's CFT * rate per row, already summed into
+// `total`), so this shares the same shape but a type-aware subject/label.
+export const sendLabourSheetEmail = async ({ toEmail, fileName, buffer, count, total, note, type }) => {
+  const label = type === "payments" ? "payments sheet" : "work log";
+  const money = new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency: "INR",
+    maximumFractionDigits: 0,
+  }).format(total || 0);
+
+  return send({
+    to: toEmail,
+    subject: `${label[0].toUpperCase()}${label.slice(1)} — ${new Date().toLocaleDateString("en-IN")}`,
+    html: `
+      <p>Here is the current ${label}.</p>
       <p><strong>${count}</strong> ${count === 1 ? "entry" : "entries"}, totalling <strong>${money}</strong>.</p>
       ${note ? `<p style="white-space:pre-wrap">${note}</p>` : ""}
       <p style="color:#666;font-size:13px">

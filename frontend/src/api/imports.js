@@ -28,3 +28,24 @@ export const previewImportSheet = async (file) => {
     );
   }
 };
+
+/**
+ * Same idea as previewImportSheet, for the Labor Wages ledgers. `type` is
+ * "worklog" or "payments" — picks which column shape the server expects.
+ * @param {File} file
+ * @param {"worklog"|"payments"} type
+ */
+export const previewLabourImportSheet = async (file, type) => {
+  try {
+    const formData = new FormData();
+    formData.append("sheet", file);
+    const response = await apiClient.post(`${BASE_URL}/labour-preview?type=${type === "payments" ? "payments" : "worklog"}`, formData);
+    return response.data;
+  } catch (error) {
+    console.error("Error previewing labour import:", error.response?.data || error.message);
+    throw new Error(
+      error.response?.data?.message ||
+        "Couldn't read that file. Please check it's a valid .csv, .xls or .xlsx file."
+    );
+  }
+};

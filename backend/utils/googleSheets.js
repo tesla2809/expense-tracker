@@ -16,24 +16,20 @@ export const extractSheetId = (urlOrId) => {
 };
 
 const SHEET_HEADER = ["Date", "Expense", "Amount", "Master", "Bill"];
+const WORK_LOG_HEADER = ["Contractor", "Date", "CFT", "Rate", "Amount"];
+const PAYMENTS_HEADER = ["Contractor", "Date", "Label", "Amount"];
 
-// Overwrites the target sheet's first tab with the given expenses — a
-// straightforward full re-export rather than an incremental sync, so the
-// Google Sheet always mirrors exactly what's in the app.
-export const exportExpensesToSheet = async (sheetIdOrUrl, expenses) => {
+// Generic full-sheet writer, shared by exportExpensesToSheet and the Labor
+// Wages exporters below — overwrites the target sheet's first tab with the
+// given header + rows. A straightforward full re-export rather than an
+// incremental sync, so the Google Sheet always mirrors exactly what's in
+// the app.
+export const writeRowsToSheet = async (sheetIdOrUrl, header, rows) => {
   const client = getSheetsClient();
   if (!client) {
     throw new Error("Google Sheets sync isn't configured on the server yet");
   }
   const spreadsheetId = extractSheetId(sheetIdOrUrl);
-
-  const rows = expenses.map((e) => [
-    new Date(e.date).toLocaleDateString("en-IN"),
-    e.expense,
-    e.amount,
-    e.master,
-    e.billFile || "",
-  ]);
 
   try {
     await client.spreadsheets.values.clear({ spreadsheetId, range: "A1:Z100000" });
@@ -41,7 +37,7 @@ export const exportExpensesToSheet = async (sheetIdOrUrl, expenses) => {
       spreadsheetId,
       range: "A1",
       valueInputOption: "RAW",
-      requestBody: { values: [SHEET_HEADER, ...rows] },
+      requestBody: { values: [header, ...rows] },
     });
   } catch (error) {
     const reason = error?.response?.data?.error?.message || error.message;
@@ -49,6 +45,40 @@ export const exportExpensesToSheet = async (sheetIdOrUrl, expenses) => {
       `Couldn't write to that Google Sheet (${reason}). Make sure the Sheet is shared with the service account's email as an Editor.`
     );
   }
+};
+
+export const exportExpensesToSheet = async (sheetIdOrUrl, expenses) => {
+  const rows = expenses.map((e) => [
+    new Date(e.date).toLocaleDateString("en-IN"),
+    e.expense,
+    e.amount,
+    e.master,
+    e.billFile || "",
+  ]);
+  return writeRowsToSheet(sheetIdOrUrl, SHEET_HEADER, rows);
+};
+
+// contractorsById maps a contractorId to its record, so the sheet shows the
+// contractor's name rather than a UUID.
+export const exportWorkLogToSheet = async (sheetIdOrUrl, wageEntries, contractorsById = new Map()) => {
+  const rows = wageEntries.map((w) => [
+    contractorsById.get(w.contractorId)?.name || "",
+    w.dateLabel || "",
+    Number(w.cft) || 0,
+    Number(w.rate) || 0,
+    Number(w.amount) || 0,
+  ]);
+  return writeRowsToSheet(sheetIdOrUrl, WORK_LOG_HEADER, rows);
+};
+
+export const exportPaymentsToSheet = async (sheetIdOrUrl, payments, contractorsById = new Map()) => {
+  const rows = payments.map((p) => [
+    contractorsById.get(p.contractorId)?.name || "",
+    p.date || "",
+    p.label || "",
+    Number(p.amount) || 0,
+  ]);
+  return writeRowsToSheet(sheetIdOrUrl, PAYMENTS_HEADER, rows);
 };
 
 // Reads every value out of the target sheet's first tab as a raw 2D array
